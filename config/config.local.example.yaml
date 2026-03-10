@@ -1,0 +1,44 @@
+# ============================================================
+# DevOps AI Agent — Local Configuration (EXAMPLE)
+# ============================================================
+# Copy this file to config.local.yaml and update the values.
+
+project:
+  name: "dconnector933"
+  workspace_dir: "/home/pankajraundal/localsetup/dconnector933"
+  module_path: "web/modules/contrib/lionbridge_translation_provider"
+  base_branch: "master"
+  branch_prefix: "feature"
+
+azure_devops:
+  organization: "https://dev.azure.com/liox-teams"
+  project: "Connectors - Integration"
+  team: "VTD Producer Connectors"
+  assigned_to: "Raundal"
+  auto_tag: "auto"
+  states:
+    - "New"
+    - "Active"
+  current_sprint_only: true
+
+zendesk:
+  enabled: false
+  subdomain: ""
+  email: ""
+  assignee_name: "Pankaj Raundal"
+  auto_create_story: true
+  poll_interval_seconds: 300
+
+ai_agent:
+  provider: "anthropic"
+  model: "claude-sonnet-4-20250514"
+  review_model: "claude-sonnet-4-20250514"
+  max_tokens: 8192
+  temperature: 0.2
+
+local_env:
+  type: "ddev"
+  drush_prefix: "ddev drush"
+  test_command: "ddev exec phpunit -c web/core"
+  lint_command: "ddev exec phpcs --standard=Drupal --extensions=php,module,install,theme"
+  cache_clear: "ddev drush cr"
