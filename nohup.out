@@ -1,0 +1,336 @@
+Dashboard running at http://localhost:8090
+Press Ctrl+C to stop.
+ * Serving Flask app 'src.dashboard.app'
+ * Debug mode: off
+[31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:8090
+ * Running on http://172.24.77.91:8090
+[33mPress CTRL+C to quit[0m
+127.0.0.1 - - [10/Mar/2026 14:28:22] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [10/Mar/2026 14:28:23] "[33mGET /favicon.ico HTTP/1.1[0m" 404 -
+127.0.0.1 - - [10/Mar/2026 14:28:52] "GET /api/events HTTP/1.1" 200 -
+127.0.0.1 - - [10/Mar/2026 14:30:32] "POST /api/fetch HTTP/1.1" 200 -
+127.0.0.1 - - [10/Mar/2026 14:31:31] "POST /api/run HTTP/1.1" 200 -
+Some tests failed:
+[FAIL] phpunit
+[31mFailed to execute command `phpunit -c web/core web/sites/default/modules/contrib/lionbridge_translation_provider/tests/`: service web has exited; state=exited[0m
+[FAIL] phpcs
+[31mFailed to execute command `phpcs --standard=Drupal,DrupalPractice --extensions=php,module,inc,install,test,profile,theme web/sites/default/modules/contrib/lionbridge_translation_provider`: service web has exited; state=exited[0m
+[FAIL] phpstan
+[31mFailed to execute command `phpstan analyse web/sites/default/modules/contrib/lionbridge_translation_provider --level=2 --no-progress`: service web has exited; state=exited[0m
+[PASS] drush_cr
+Dashboard running at http://localhost:8090
+Press Ctrl+C to stop.
+ * Serving Flask app 'src.dashboard.app'
+ * Debug mode: off
+[31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:8090
+ * Running on http://172.24.77.91:8090
+[33mPress CTRL+C to quit[0m
+127.0.0.1 - - [11/Mar/2026 06:47:07] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [11/Mar/2026 06:47:07] "[33mGET /favicon.ico HTTP/1.1[0m" 404 -
+127.0.0.1 - - [11/Mar/2026 06:47:38] "GET /api/events HTTP/1.1" 200 -
+127.0.0.1 - - [11/Mar/2026 06:51:02] "POST /api/fetch HTTP/1.1" 200 -
+127.0.0.1 - - [11/Mar/2026 06:57:17] "POST /api/run HTTP/1.1" 200 -
+Some tests failed:
+[FAIL] phpunit
+[31mFailed to execute command `phpunit -c web/core web/sites/default/modules/contrib/lionbridge_translation_provider/tests/`: service web has exited; state=exited[0m
+[FAIL] phpcs
+[31mFailed to execute command `phpcs --standard=Drupal,DrupalPractice --extensions=php,module,inc,install,test,profile,theme web/sites/default/modules/contrib/lionbridge_translation_provider`: service web has exited; state=exited[0m
+[FAIL] phpstan
+[31mFailed to execute command `phpstan analyse web/sites/default/modules/contrib/lionbridge_translation_provider --level=2 --no-progress`: service web has exited; state=exited[0m
+[FAIL] drush_cr
+Building project images...[32mProject images built in 3s.[0m
+ Container ddev-dconnector933-db Recreate 
+ Container ddev-dconnector933-web Recreate 
+ Container ddev-dconnector933-db Started 
+Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint ddev-dconnector933-web (2fd530d5484d7d5976579f3648cca55fd2d7bee51fefa8a1cdb54102e7f861a5): Bind for 127.0.0.1:32768 failed: port is already allocated
+..
+[31mFailed to start project for custom command: composeCmd failed to run 'COMPOSE_PROJECT_NAME=ddev-dconnector933 docker-compose -f /home/pankajraundal/localsetup/dconnector933/.ddev/.ddev-docker-compose-full.yaml up -d', action='[up -d]', err='exit status 1', stdout='', stderr=' Container ddev-dconnector933-db Recreate 
+ Container ddev-dconnector933-web Recreate 
+ Container ddev-dconnector933-web Recreated 
+ Container ddev-dconnector933-db Recreated 
+ Container ddev-dconnector933-web Starting 
+ Container ddev-dconnector933-db Starting 
+ Container ddev-dconnector933-db Started 
+Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint ddev-dconnector933-web (2fd530d5484d7d5976579f3648cca55fd2d7bee51fefa8a1cdb54102e7f861a5): Bind for 127.0.0.1:32768 failed: port is already allocated'[0m
+127.0.0.1 - - [11/Mar/2026 07:12:13] "GET /api/events HTTP/1.1" 200 -
+127.0.0.1 - - [11/Mar/2026 07:18:16] "GET /api/events HTTP/1.1" 200 -
+Dashboard running at http://localhost:8090
+Press Ctrl+C to stop.
+ * Serving Flask app 'src.dashboard.app'
+ * Debug mode: off
+[31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:8090
+ * Running on http://172.24.77.91:8090
+[33mPress CTRL+C to quit[0m
+127.0.0.1 - - [12/Mar/2026 09:14:48] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 09:14:48] "[33mGET /favicon.ico HTTP/1.1[0m" 404 -
+127.0.0.1 - - [12/Mar/2026 09:15:03] "POST /api/fetch HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 09:15:11] "POST /api/run HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 09:15:11] "GET /api/events HTTP/1.1" 200 -
+Some tests failed:
+[FAIL] phpunit
+PHPUnit 9.6.29 by Sebastian Bergmann and contributors.
+
+Cannot open file "web/sites/default/modules/contrib/lionbridge_translation_provider/tests/".
+[31mFailed to execute command `phpunit -c web/core web/sites/default/modules/contrib/lionbridge_translation_provider/tests/`: exit status 1[0m
+[FAIL] phpcs
+
+FILE: ..._translation_provider/tmgmt_contentapi/src/Swagger/Client/ApiException.php
+--------------------------------------------------------------------------------
+FOUND 77 ERRORS AND 2 WARNINGS AFFECTING 66 LINES
+--------------------------------------------------------------------------------
+   1 | ERROR   | [x] The PHP open tag must be followed by exactly one blank
+     |         |     line
+   2 | ERROR   | [x] Namespaced classes, interfaces and traits should not begin
+     |         |     with a file doc comment
+   4 | ERROR   | [ ] Doc comment short description must end with a full stop
+   4 | ERROR   | [ ] Doc comment short description must be on a single line,
+     |         |     further text should be a separate paragraph
+   7 | ERROR   | [x] Tag value indented incorrectly; expected 1 space but found
+     |         |     2
+   8 | WARNING | [ ] @author tags are not usually used in Drupal, because over
+     |         |     time multiple contributors will touch the code anyway
+   8 | ERROR   | [x] Tag value indented incorrectly; expected 1 space but found
+     |         |     3
+   9 | ERROR   | [x] Tag value indented incorrectly; expected 1 space but found
+     |         |     5
+  13 | ERROR   | [x] Doc comment short description must end with a full stop
+  18 | ERROR   | [x] Whitespace found at end of line
+  26 | ERROR   | [ ] Doc comment short description must be on a single line,
+     |         |     further text should be a separate paragraph
+  31 | ERROR   | [x] When importing a class with "use", do not include a
+     |         |     leading \
+  34 | ERROR   | [x] Doc comment short description must end with a full stop
+  37 | ERROR   | [x] Tag value indented incorrectly; expected 1 space but found
+     |         |     2
+  38 | WARNING | [ ] @author tags are not usually used in Drupal, because over
+     |         |     time multiple contributors will touch the code anyway
+  38 | ERROR   | [x] Tag value indented incorrectly; expected 1 space but found
+     |         |     3
+  39 | ERROR   | [x] Tag value indented incorrectly; expected 1 space but found
+     |         |     5
+  42 | ERROR   | [x] Opening brace should be on the same line as the
+     |         |     declaration
+  44 | ERROR   | [x] Line indented incorrectly; expected 2 spaces, found 4
+  49 | ERROR   | [x] Line indented incorrectly; expected 2 spaces, found 4
+  51 | ERROR   | [x] Line indented incorrectly; expected 2 spaces, found 4
+[FAIL] phpstan
+ ------ ------------------------------------------------------------------------------------------------------------------------------------------------------------ 
+  Line   src/Plugin/tmgmt/Translator/LionbridgeTranslator.php                                                                                                        
+ ------ ------------------------------------------------------------------------------------------------------------------------------------------------------------ 
+  53     \Drupal calls should be avoided in classes, use dependency injection instead                                                                                
+  74     \Drupal calls should be avoided in classes, use dependency injection instead                                                                                
+  112    Instantiated class Drupal\lionbridge_translation_provider\LionbridgeConnector not found.                                                                    
+         💡 Learn more at https://phpstan.org/user-guide/discovering-symbols                                                                                         
+  113    Call to method listLocales() on an unknown class Drupal\lionbridge_translation_provider\LionbridgeConnector.                                                
+         💡 Learn more at https://phpstan.org/user-guide/discovering-symbols                                                                                         
+  152    Instantiated class Drupal\lionbridge_translation_provider\LionbridgeConnector not found.                                                                    
+         💡 Learn more at https://phpstan.org/user-guide/discovering-symbols                                                                                         
+  176    \Drupal calls should be avoided in classes, use dependency injection instead                                                                                
+  180    Call to an undefined method Drupal\Core\Entity\EntityInterface::hasTranslation().                                                                           
+  186    Call to an undefined method Drupal\Core\Entity\EntityInterface::getTranslation().                                                                           
+  187    Call to an undefined method Drupal\tmgmt\SourcePluginInterface::extractTranslatableData().                                                                  
+  285    Instantiated class Drupal\lionbridge_translation_provider\LionbridgeConnector not found.                                                                    
+         💡 Learn more at https://phpstan.org/user-guide/discovering-symbols                                                                                         
+  286    Method Drupal\lionbridge_translation_provider\Plugin\tmgmt\Translator\LionbridgeTranslator::fetchJob() should return bool but return statement is missing.  
+  287    Call to method getQuote() on an unknown class Drupal\lionbridge_translation_provider\LionbridgeConnector.                                                   
+         💡 Learn more at https://phpstan.org/user-guide/discovering-symbols                                                                                         
+  296    Access to constant QUOTE_STATUS_ERROR on an unknown class Drupal\lionbridge_translation_provider\LionbridgeConnector.                                       
+         💡 Learn more at https://phpstan.org/user-guide/discovering-symbols                                                                                         
+  301    Access to constant QUOTE_STATUS_PENDING on an unknown class Drupal\lionbridge_translation_provider\LionbridgeConnector.                                     
+         💡 Learn more at https://phpstan.org/user-guide/discovering-symbols                                                                                         
+  305    Call to method getEndpoint() on an unknown class Drupal\lionbridge_translation_provider\LionbridgeConnector.                                                
+         💡 Learn more at https://phpstan.org/user-guide/discovering-symbols                                                                                         
+  310    Access to constant QUOTE_STATUS_CALCULATING on an unknown class Drupal\lionbridge_translation_provider\LionbridgeConnector.                                 
+         💡 Learn more at https://phpstan.org/user-guide/discovering-symbols                                                                                         
+  314    Access to constant QUOTE_STATUS_AUTHORIZED on an unknown class Drupal\lionbridge_translation_provider\LionbridgeConnector.                                  
+         💡 Learn more at https://phpstan.org/user-guide/discovering-symbols                                                                                         
+  323    Access to constant QUOTE_STATUS_COMPLETE on an unknown class Drupal\lionbridge_translation_provider\LionbridgeConnector.                                    
+         💡 Learn more at https://phpstan.org/user-guide/discovering-symbols                                                                                         
+  338    Call to method getFileTranslation() on an unknown class Drupal\lionbridge_translation_provider\LionbridgeConnector.                                         
+         💡 Learn more at https://phpstan.org/user-guide/discovering-symbols                                                                                         
+  346    Function _lionbridge_translation_provider_batch not found.                                                                                                  
+         💡 Learn more at https://phpstan.org/user-guide/discovering-symbols                                                                                         
+  364    Instantiated class Drupal\lionbridge_translation_provider\LionbridgeConnector not found.                                                                    
+         💡 Learn more at https://phpstan.org/user-guide/discovering-symbols                                                                                         
+  365    Call to method getQuote() on an unknown class Drupal\lionbridge_translation_provider\LionbridgeConnector.                                                   
+         💡 Learn more at https://phpstan.org/user-guide/discovering-symbols                                                                                         
+[PASS] drush_cr
+Dashboard running at http://localhost:8090
+Press Ctrl+C to stop.
+ * Serving Flask app 'src.dashboard.app'
+ * Debug mode: off
+[31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:8090
+ * Running on http://172.24.77.91:8090
+[33mPress CTRL+C to quit[0m
+127.0.0.1 - - [12/Mar/2026 09:39:24] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 09:39:44] "GET /api/events HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 09:39:44] "POST /api/run HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 09:41:16] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 09:41:17] "GET /api/events HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 09:41:22] "POST /api/run HTTP/1.1" 200 -
+Some tests failed:
+[FAIL] phpunit
+PHPUnit 9.6.29 by Sebastian Bergmann and contributors.
+
+Cannot open file "web/sites/default/modules/contrib/lionbridge_translation_provider/tests/".
+[31mFailed to execute command `phpunit -c web/core web/sites/default/modules/contrib/lionbridge_translation_provider/tests/`: exit status 1[0m
+[FAIL] phpcs
+
+FILE: ..._translation_provider/tmgmt_contentapi/src/Swagger/Client/ApiException.php
+--------------------------------------------------------------------------------
+FOUND 77 ERRORS AND 2 WARNINGS AFFECTING 66 LINES
+--------------------------------------------------------------------------------
+   1 | ERROR   | [x] The PHP open tag must be followed by exactly one blank
+     |         |     line
+   2 | ERROR   | [x] Namespaced classes, interfaces and traits should not begin
+     |         |     with a file doc comment
+   4 | ERROR   | [ ] Doc comment short description must end with a full stop
+   4 | ERROR   | [ ] Doc comment short description must be on a single line,
+     |         |     further text should be a separate paragraph
+   7 | ERROR   | [x] Tag value indented incorrectly; expected 1 space but found
+     |         |     2
+   8 | WARNING | [ ] @author tags are not usually used in Drupal, because over
+     |         |     time multiple contributors will touch the code anyway
+   8 | ERROR   | [x] Tag value indented incorrectly; expected 1 space but found
+     |         |     3
+   9 | ERROR   | [x] Tag value indented incorrectly; expected 1 space but found
+     |         |     5
+  13 | ERROR   | [x] Doc comment short description must end with a full stop
+  18 | ERROR   | [x] Whitespace found at end of line
+  26 | ERROR   | [ ] Doc comment short description must be on a single line,
+     |         |     further text should be a separate paragraph
+  31 | ERROR   | [x] When importing a class with "use", do not include a
+     |         |     leading \
+  34 | ERROR   | [x] Doc comment short description must end with a full stop
+  37 | ERROR   | [x] Tag value indented incorrectly; expected 1 space but found
+     |         |     2
+  38 | WARNING | [ ] @author tags are not usually used in Drupal, because over
+     |         |     time multiple contributors will touch the code anyway
+  38 | ERROR   | [x] Tag value indented incorrectly; expected 1 space but found
+     |         |     3
+  39 | ERROR   | [x] Tag value indented incorrectly; expected 1 space but found
+     |         |     5
+  42 | ERROR   | [x] Opening brace should be on the same line as the
+     |         |     declaration
+  44 | ERROR   | [x] Line indented incorrectly; expected 2 spaces, found 4
+  49 | ERROR   | [x] Line indented incorrectly; expected 2 spaces, found 4
+  51 | ERROR   | [x] Line indented incorrectly; expected 2 spaces, found 4
+[FAIL] phpstan
+ ------ ------------------------------------------------------------------------------------------------------------------------------------------------------------ 
+  Line   src/Plugin/tmgmt/Translator/LionbridgeTranslator.php                                                                                                        
+ ------ ------------------------------------------------------------------------------------------------------------------------------------------------------------ 
+  53     \Drupal calls should be avoided in classes, use dependency injection instead                                                                                
+  74     \Drupal calls should be avoided in classes, use dependency injection instead                                                                                
+  112    Instantiated class Drupal\lionbridge_translation_provider\LionbridgeConnector not found.                                                                    
+         💡 Learn more at https://phpstan.org/user-guide/discovering-symbols                                                                                         
+  113    Call to method listLocales() on an unknown class Drupal\lionbridge_translation_provider\LionbridgeConnector.                                                
+         💡 Learn more at https://phpstan.org/user-guide/discovering-symbols                                                                                         
+  152    Instantiated class Drupal\lionbridge_translation_provider\LionbridgeConnector not found.                                                                    
+         💡 Learn more at https://phpstan.org/user-guide/discovering-symbols                                                                                         
+  176    \Drupal calls should be avoided in classes, use dependency injection instead                                                                                
+  180    Call to an undefined method Drupal\Core\Entity\EntityInterface::hasTranslation().                                                                           
+  186    Call to an undefined method Drupal\Core\Entity\EntityInterface::getTranslation().                                                                           
+  187    Call to an undefined method Drupal\tmgmt\SourcePluginInterface::extractTranslatableData().                                                                  
+  285    Instantiated class Drupal\lionbridge_translation_provider\LionbridgeConnector not found.                                                                    
+         💡 Learn more at https://phpstan.org/user-guide/discovering-symbols                                                                                         
+  286    Method Drupal\lionbridge_translation_provider\Plugin\tmgmt\Translator\LionbridgeTranslator::fetchJob() should return bool but return statement is missing.  
+  287    Call to method getQuote() on an unknown class Drupal\lionbridge_translation_provider\LionbridgeConnector.                                                   
+         💡 Learn more at https://phpstan.org/user-guide/discovering-symbols                                                                                         
+  296    Access to constant QUOTE_STATUS_ERROR on an unknown class Drupal\lionbridge_translation_provider\LionbridgeConnector.                                       
+         💡 Learn more at https://phpstan.org/user-guide/discovering-symbols                                                                                         
+  301    Access to constant QUOTE_STATUS_PENDING on an unknown class Drupal\lionbridge_translation_provider\LionbridgeConnector.                                     
+         💡 Learn more at https://phpstan.org/user-guide/discovering-symbols                                                                                         
+  305    Call to method getEndpoint() on an unknown class Drupal\lionbridge_translation_provider\LionbridgeConnector.                                                
+         💡 Learn more at https://phpstan.org/user-guide/discovering-symbols                                                                                         
+  310    Access to constant QUOTE_STATUS_CALCULATING on an unknown class Drupal\lionbridge_translation_provider\LionbridgeConnector.                                 
+         💡 Learn more at https://phpstan.org/user-guide/discovering-symbols                                                                                         
+  314    Access to constant QUOTE_STATUS_AUTHORIZED on an unknown class Drupal\lionbridge_translation_provider\LionbridgeConnector.                                  
+         💡 Learn more at https://phpstan.org/user-guide/discovering-symbols                                                                                         
+  323    Access to constant QUOTE_STATUS_COMPLETE on an unknown class Drupal\lionbridge_translation_provider\LionbridgeConnector.                                    
+         💡 Learn more at https://phpstan.org/user-guide/discovering-symbols                                                                                         
+  338    Call to method getFileTranslation() on an unknown class Drupal\lionbridge_translation_provider\LionbridgeConnector.                                         
+         💡 Learn more at https://phpstan.org/user-guide/discovering-symbols                                                                                         
+  346    Function _lionbridge_translation_provider_batch not found.                                                                                                  
+         💡 Learn more at https://phpstan.org/user-guide/discovering-symbols                                                                                         
+  364    Instantiated class Drupal\lionbridge_translation_provider\LionbridgeConnector not found.                                                                    
+         💡 Learn more at https://phpstan.org/user-guide/discovering-symbols                                                                                         
+  365    Call to method getQuote() on an unknown class Drupal\lionbridge_translation_provider\LionbridgeConnector.                                                   
+         💡 Learn more at https://phpstan.org/user-guide/discovering-symbols                                                                                         
+[PASS] drush_cr
+127.0.0.1 - - [12/Mar/2026 10:11:14] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 10:11:15] "GET /api/events HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 10:11:25] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 10:11:26] "GET /api/events HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 10:19:24] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 10:19:24] "GET /api/events HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 10:19:30] "GET /?123123 HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 10:19:30] "GET /api/events HTTP/1.1" 200 -
+Dashboard running at http://localhost:8090
+Press Ctrl+C to stop.
+ * Serving Flask app 'src.dashboard.app'
+ * Debug mode: off
+[31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:8090
+ * Running on http://172.24.77.91:8090
+[33mPress CTRL+C to quit[0m
+127.0.0.1 - - [12/Mar/2026 10:19:47] "GET /?123123 HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 10:19:52] "POST /api/fetch-all HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 10:19:59] "POST /api/fetch HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 10:20:15] "GET /api/events HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 10:20:20] "GET /api/events HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 10:36:45] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 10:36:54] "POST /api/fetch-all HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 10:37:05] "POST /api/fetch-all HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 10:37:17] "GET /api/events HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 10:38:06] "POST /api/fetch-all HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 10:38:19] "POST /api/run-all HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 10:38:51] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 10:38:51] "GET /api/events HTTP/1.1" 200 -
+Dashboard running at http://localhost:8090
+Press Ctrl+C to stop.
+ * Serving Flask app 'src.dashboard.app'
+ * Debug mode: off
+[31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:8090
+ * Running on http://172.24.77.91:8090
+[33mPress CTRL+C to quit[0m
+127.0.0.1 - - [12/Mar/2026 10:39:02] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 10:39:07] "POST /api/run-all HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 10:39:15] "GET /api/events HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 10:39:15] "GET /api/events HTTP/1.1" 200 -
+Dashboard running at http://localhost:8090
+Press Ctrl+C to stop.
+ * Serving Flask app 'src.dashboard.app'
+ * Debug mode: off
+[31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:8090
+ * Running on http://172.24.77.91:8090
+[33mPress CTRL+C to quit[0m
+127.0.0.1 - - [12/Mar/2026 10:52:54] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 10:53:03] "POST /api/run-all HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 10:53:13] "GET /api/events HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 10:53:13] "GET /api/events HTTP/1.1" 200 -
+Dashboard running at http://localhost:8090
+Press Ctrl+C to stop.
+ * Serving Flask app 'src.dashboard.app'
+ * Debug mode: off
+[31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:8090
+ * Running on http://172.24.77.91:8090
+[33mPress CTRL+C to quit[0m
+127.0.0.1 - - [12/Mar/2026 10:59:54] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 11:00:07] "POST /api/run-all HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 11:00:12] "GET /api/events HTTP/1.1" 200 -
+127.0.0.1 - - [12/Mar/2026 11:00:12] "GET /api/events HTTP/1.1" 200 -

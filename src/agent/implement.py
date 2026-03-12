@@ -22,6 +22,7 @@ class ImplementationAgent:
         self.model = ai.get("model", "claude-sonnet-4-20250514")
         self.max_tokens = ai.get("max_tokens", 8192)
         self.temperature = ai.get("temperature", 0.2)
+        self.require_consent = ai.get("require_consent", True)
         self.workspace_dir = Path(config["project"]["workspace_dir"])
         self.module_path = config["project"].get("module_path", "")
 
@@ -59,6 +60,23 @@ class ImplementationAgent:
             f"Do not create documentation files unless asked.\n\n{story_context}"
         )
 
+        if self.require_consent:
+            from src.utils.data_consent import request_consent
+
+            approved = request_consent(
+                action="Implement story via Claude Code CLI (full filesystem access)",
+                provider="claude-code-cli",
+                model="local CLI",
+                data_summary=[
+                    ("Story context", "Work item title, description, acceptance criteria, comments"),
+                    ("Module path", self.module_path),
+                    ("⚠ Filesystem", "Claude Code CLI has full read/write access to workspace"),
+                ],
+                full_payload=prompt,
+            )
+            if not approved:
+                return None
+
         try:
             result = subprocess.run(
                 ["claude", "--print", "--dangerously-skip-permissions", "-m", prompt],
@@ -88,6 +106,23 @@ class ImplementationAgent:
             f"Implement the following story in the codebase. "
             f"Module path: {self.module_path}\n\n{story_context}"
         )
+
+        if self.require_consent:
+            from src.utils.data_consent import request_consent
+
+            approved = request_consent(
+                action="Implement story via Codex CLI (full filesystem access)",
+                provider="codex-cli",
+                model="local CLI",
+                data_summary=[
+                    ("Story context", "Work item title, description, acceptance criteria, comments"),
+                    ("Module path", self.module_path),
+                    ("⚠ Filesystem", "Codex CLI has full read/write access to workspace"),
+                ],
+                full_payload=prompt,
+            )
+            if not approved:
+                return None
 
         try:
             result = subprocess.run(
@@ -125,9 +160,32 @@ class ImplementationAgent:
             f"4. Testing steps to verify the changes\n"
         )
 
+        if self.require_consent:
+            from src.utils.data_consent import request_consent
+
+            approved = request_consent(
+                action="Implement story via API",
+                provider=self.provider,
+                model=self.model,
+                data_summary=[
+                    ("Story context", "Work item title, description, acceptance criteria, comments"),
+                    ("Module file tree", f"{self.module_path} — file names only, no contents"),
+                    ("System prompt", "Drupal development instructions"),
+                ],
+                full_payload=system_prompt + "\n\n" + full_prompt,
+            )
+            if not approved:
+                return {
+                    "success": False,
+                    "method": f"{self.provider}-api",
+                    "output": "User denied consent to send data.",
+                }
+
         try:
             if self.provider == "anthropic":
                 response = self._call_anthropic(system_prompt, full_prompt)
+            elif self.provider == "copilot":
+                response = self._call_copilot(system_prompt, full_prompt)
             else:
                 response = self._call_openai(system_prompt, full_prompt)
 
@@ -159,6 +217,24 @@ class ImplementationAgent:
     def _call_openai(self, system_prompt: str, user_prompt: str) -> str:
         """Call OpenAI API."""
         client = openai.OpenAI()
+        response = client.chat.completions.create(
+            model=self.model,
+            max_tokens=self.max_tokens,
+            temperature=self.temperature,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        )
+        return response.choices[0].message.content
+
+    def _call_copilot(self, system_prompt: str, user_prompt: str) -> str:
+        """Call GitHub Models API — OpenAI-compatible, uses `gh auth token`."""
+        token = _get_github_token()
+        client = openai.OpenAI(
+            base_url="https://models.github.ai/inference/v1",
+            api_key=token,
+        )
         response = client.chat.completions.create(
             model=self.model,
             max_tokens=self.max_tokens,
@@ -204,6 +280,30 @@ class ImplementationAgent:
             lines = lines[:200] + [f"... and {len(lines) - 200} more files"]
 
         return "```\n" + "\n".join(lines) + "\n```"
+
+
+def _get_github_token() -> str:
+    """Get a GitHub token — prefers `gh auth token` (OAuth), falls back to GITHUB_TOKEN env var."""
+    import os
+
+    # Prefer gh CLI OAuth token (has broader access to GitHub Models)
+    try:
+        result = subprocess.run(
+            ["gh", "auth", "token"], capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+
+    # Fall back to env var
+    token = os.environ.get("GITHUB_TOKEN", "")
+    if token:
+        return token
+
+    raise RuntimeError(
+        "No GitHub token found. Run `gh auth login` or set GITHUB_TOKEN env var."
+    )
 
 
 def _command_exists(cmd: str) -> bool:

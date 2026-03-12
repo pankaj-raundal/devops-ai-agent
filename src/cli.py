@@ -49,13 +49,14 @@ def fetch(ctx):
 @main.command()
 @click.option("--story-id", "-s", type=int, default=None, help="Specific work item ID")
 @click.option("--skip-tests", is_flag=True, help="Skip test execution")
+@click.option("--dry-run", is_flag=True, help="Fetch story and build context only — no branch, AI, or tests")
 @click.pass_context
-def run(ctx, story_id, skip_tests):
+def run(ctx, story_id, skip_tests, dry_run):
     """Run the full pipeline: Fetch → Branch → Implement → Test → Review."""
     from .pipeline import Pipeline
 
     pipeline = Pipeline(ctx.obj["config"])
-    results = pipeline.run(work_item_id=story_id, skip_tests=skip_tests)
+    results = pipeline.run(work_item_id=story_id, skip_tests=skip_tests, dry_run=dry_run)
 
     table = Table(title="Pipeline Results")
     table.add_column("Stage", style="cyan")
@@ -91,6 +92,41 @@ def from_zendesk(ctx, ticket_id):
         sys.exit(1)
 
 
+@main.command(name="run-all")
+@click.option("--skip-tests", is_flag=True, help="Skip test execution")
+@click.option("--dry-run", is_flag=True, help="Dry run mode")
+@click.pass_context
+def run_all(ctx, skip_tests, dry_run):
+    """Fetch all matching stories and run the pipeline on each sequentially."""
+    from .pipeline import Pipeline
+
+    pipeline = Pipeline(ctx.obj["config"])
+    all_results = pipeline.run_queue(skip_tests=skip_tests, dry_run=dry_run)
+
+    if not all_results:
+        console.print("[yellow]No stories found in queue.[/]")
+        return
+
+    table = Table(title=f"Queue Results — {len(all_results)} Stories")
+    table.add_column("Story", style="cyan")
+    table.add_column("Status")
+    table.add_column("Stages")
+
+    any_failed = False
+    for wid, results in all_results.items():
+        success = all(r.success for r in results)
+        if not success:
+            any_failed = True
+        status = "[green]PASS[/]" if success else "[red]FAIL[/]"
+        stages = ", ".join(r.stage.value for r in results)
+        table.add_row(f"#{wid}", status, stages[:80])
+
+    console.print(table)
+
+    if any_failed:
+        sys.exit(1)
+
+
 @main.command()
 @click.pass_context
 def implement(ctx):
@@ -105,7 +141,7 @@ def implement(ctx):
         console.print("[red]No .current-story.md found. Run 'dai fetch' first.[/]")
         sys.exit(1)
 
-    story_context = load_story_context(context_path)
+    story_context = load_story_context(ctx.obj["config"])
     agent = ImplementationAgent(ctx.obj["config"])
     result = agent.implement(story_context)
 
@@ -163,20 +199,33 @@ def watch(ctx):
     interval = config.get("webhook", {}).get("poll_interval", 300)
     seen_ids: set[int] = set()
 
+    # Pre-populate seen_ids from local run history (avoid re-processing).
+    from .agent.context_builder import load_run_history
+
+    for record in load_run_history(config):
+        wid = record.get("work_item_id")
+        if wid and record.get("failed_stage") is None:
+            seen_ids.add(wid)
+
     console.print(f"[bold]Watching for new stories (every {interval}s)...[/]")
+    if seen_ids:
+        console.print(f"[dim]Skipping {len(seen_ids)} previously processed story ID(s): {seen_ids}[/]")
 
     client = AzureDevOpsClient(config)
     pipeline = Pipeline(config)
 
     while True:
-        story = client.fetch_latest_story()
-        if story and story.id not in seen_ids:
-            seen_ids.add(story.id)
-            console.print(f"\n[bold green]New story: #{story.id} {story.title}[/]")
-            results = pipeline.run(work_item_id=story.id)
-            for r in results:
-                status = "✓" if r.success else "✗"
-                console.print(f"  {status} {r.stage.value}")
+        stories = client.fetch_all_stories()
+        new_stories = [s for s in stories if s.id not in seen_ids]
+        if new_stories:
+            console.print(f"\n[bold]Found {len(new_stories)} new story/stories in queue.[/]")
+            for i, story in enumerate(new_stories, 1):
+                seen_ids.add(story.id)
+                console.print(f"\n[bold green][{i}/{len(new_stories)}] Story #{story.id}: {story.title}[/]")
+                results = pipeline.run(work_item_id=story.id)
+                for r in results:
+                    status = "✓" if r.success else "✗"
+                    console.print(f"  {status} {r.stage.value}")
         time.sleep(interval)
 
 
@@ -202,6 +251,20 @@ def webhook(ctx, port):
     app = create_app(config, on_devops, on_zendesk)
     console.print(f"[bold]Webhook server listening on port {port}[/]")
     app.run(host="0.0.0.0", port=port)
+
+
+@main.command()
+@click.option("--port", "-p", type=int, default=8090, help="Port for dashboard")
+@click.pass_context
+def dashboard(ctx, port):
+    """Start the web dashboard for pipeline monitoring."""
+    from .dashboard.app import create_dashboard
+
+    config = ctx.obj["config"]
+    app = create_dashboard(config)
+    console.print(f"[bold green]Dashboard running at http://localhost:{port}[/]")
+    console.print("Press Ctrl+C to stop.")
+    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
 
 
 if __name__ == "__main__":

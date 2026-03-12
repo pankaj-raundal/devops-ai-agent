@@ -19,10 +19,14 @@ azure_devops:
   team: ""                     # e.g. "My Team"
   assigned_to: ""              # e.g. "John Doe"
   auto_tag: "auto"             # Tag that marks stories for automation
-  states:
+  states:                        # States to FETCH for processing (must have 'auto' tag too)
     - "New"
     - "Active"
   current_sprint_only: true
+  # State transitions after pipeline processing:
+  state_on_success: "Testing"    # After successful pipeline (code change path)
+  state_on_no_code: "Evaluation" # After analysis finds no code change needed
+  state_on_failure: ""           # Leave empty to keep current state on failure
 
 # --- Zendesk ---
 zendesk:
@@ -44,10 +48,14 @@ webhook:
 
 # --- AI Agent ---
 ai_agent:
-  provider: "anthropic"        # "anthropic", "openai", or "custom"
+  provider: "anthropic"        # "anthropic", "openai", or "copilot"
   model: "claude-sonnet-4-20250514"  # Model to use for implementation
   review_model: "claude-sonnet-4-20250514"  # Model to use for code review
-  # API keys stored in environment: ANTHROPIC_API_KEY or OPENAI_API_KEY
+  require_consent: true        # Prompt user to review data before sending to AI
+  # API keys stored in environment:
+  #   anthropic → ANTHROPIC_API_KEY
+  #   openai   → OPENAI_API_KEY
+  #   copilot  → GITHUB_TOKEN (uses GitHub Models API with OpenAI-compatible endpoint)
   max_tokens: 8192
   temperature: 0.2
   context_files:               # Files to include as context for the AI agent

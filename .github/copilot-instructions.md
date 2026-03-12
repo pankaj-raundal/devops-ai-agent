@@ -42,7 +42,7 @@ src/
 ## Configuration
 - **Default config:** `config/config.yaml`
 - **Local overrides:** `config/config.local.yaml` (git-ignored)
-- **Secrets via env vars:** `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AZURE_DEVOPS_PAT`, `ZENDESK_API_TOKEN`, `WEBHOOK_SECRET`, `SLACK_WEBHOOK_URL`
+- **Secrets via env vars:** `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GITHUB_TOKEN` (for copilot provider), `AZURE_DEVOPS_PAT`, `ZENDESK_API_TOKEN`, `WEBHOOK_SECRET`, `SLACK_WEBHOOK_URL`
 - Config loading: `src/config.py` — `load_config()` merges base → local → env vars
 
 ## Key Dependencies
@@ -75,7 +75,8 @@ src/
 ## AI Implementation Strategy (in order)
 1. **Claude Code CLI** (`claude --print`) — best option, full file-level autonomy
 2. **Codex CLI** (`codex --approval-mode auto`) — OpenAI alternative
-3. **API fallback** — sends story context + module structure to Claude/OpenAI API
+3. **API fallback** — sends story context + module structure to Claude/OpenAI/GitHub Copilot API
+   - Providers: `anthropic` (Anthropic SDK), `openai` (OpenAI SDK), `copilot` (GitHub Models API — OpenAI-compatible, uses `GITHUB_TOKEN`)
 
 ## Development Workflow
 1. Activate venv: `source .venv/bin/activate`

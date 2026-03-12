@@ -158,6 +158,41 @@ class ZendeskClient:
         ticket.comments = self.get_ticket_comments(ticket_id)
         return ticket
 
+    def add_comment(self, ticket_id: int, body: str, public: bool = False) -> bool:
+        """Add a comment to a Zendesk ticket.
+
+        Args:
+            ticket_id: The ticket to comment on.
+            body: Comment text (plain text or HTML).
+            public: If True, visible to the requester. Default is internal note.
+        """
+        if not self.enabled:
+            logger.debug("Zendesk integration disabled — skipping comment.")
+            return False
+
+        logger.info("Adding %s comment to Zendesk ticket #%s...",
+                     "public" if public else "internal", ticket_id)
+        try:
+            resp = httpx.put(
+                f"{self._base_url}/tickets/{ticket_id}.json",
+                auth=self._auth(),
+                json={
+                    "ticket": {
+                        "comment": {
+                            "body": body,
+                            "public": public,
+                        }
+                    }
+                },
+                timeout=30,
+            )
+            resp.raise_for_status()
+            logger.info("Comment added to Zendesk #%s.", ticket_id)
+            return True
+        except httpx.HTTPError as e:
+            logger.error("Failed to add comment to Zendesk #%s: %s", ticket_id, e)
+            return False
+
     def poll_new_tickets(self) -> list[ZendeskTicket]:
         """Return only tickets not previously seen."""
         tickets = self.fetch_assigned_tickets()

@@ -34,6 +34,7 @@ class AIReviewer:
         self.provider = ai.get("provider", "anthropic")
         self.model = ai.get("model", "claude-sonnet-4-20250514")
         self.max_tokens = ai.get("max_tokens", 4096)
+        self.require_consent = ai.get("require_consent", True)
 
     def review(self, diff: str, story_context: str) -> dict:
         """Review a diff against story context.
@@ -54,9 +55,32 @@ class AIReviewer:
             f"Review the above changes against the story requirements."
         )
 
+        if self.require_consent:
+            from src.utils.data_consent import request_consent
+
+            approved = request_consent(
+                action="AI code review",
+                provider=self.provider,
+                model=self.model,
+                data_summary=[
+                    ("Story context", "Work item title, description, acceptance criteria"),
+                    ("Git diff", f"Code changes (~{len(diff):,} chars, truncated to 15k)"),
+                    ("System prompt", "Code review instructions"),
+                ],
+                full_payload=REVIEW_SYSTEM_PROMPT + "\n\n" + prompt,
+            )
+            if not approved:
+                return {
+                    "verdict": "COMMENT",
+                    "findings": "User denied consent to send data.",
+                    "summary": "Review skipped — user did not approve data transfer.",
+                }
+
         try:
             if self.provider == "anthropic":
                 text = self._call_anthropic(prompt)
+            elif self.provider == "copilot":
+                text = self._call_copilot(prompt)
             else:
                 text = self._call_openai(prompt)
 
@@ -84,6 +108,26 @@ class AIReviewer:
 
     def _call_openai(self, prompt: str) -> str:
         client = openai.OpenAI()
+        resp = client.chat.completions.create(
+            model=self.model,
+            max_tokens=self.max_tokens,
+            temperature=0.1,
+            messages=[
+                {"role": "system", "content": REVIEW_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+        )
+        return resp.choices[0].message.content
+
+    def _call_copilot(self, prompt: str) -> str:
+        """Call GitHub Models API — OpenAI-compatible, uses `gh auth token`."""
+        from src.agent.implement import _get_github_token
+
+        token = _get_github_token()
+        client = openai.OpenAI(
+            base_url="https://models.github.ai/inference/v1",
+            api_key=token,
+        )
         resp = client.chat.completions.create(
             model=self.model,
             max_tokens=self.max_tokens,

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 
 from src.integrations.azure_devops import WorkItem
@@ -10,6 +12,7 @@ from src.integrations.azure_devops import WorkItem
 logger = logging.getLogger("devops_ai_agent.context")
 
 CONTEXT_FILENAME = ".current-story.md"
+RUN_HISTORY_FILENAME = ".pipeline-history.json"
 
 
 def build_story_context(work_item: WorkItem, config: dict) -> str:
@@ -76,3 +79,62 @@ def load_story_context(config: dict) -> str | None:
     if context_file.exists():
         return context_file.read_text()
     return None
+
+
+# --- Run history (persists across pipeline runs) ---
+
+def _history_path(config: dict) -> Path:
+    workspace = Path(config["project"]["workspace_dir"])
+    return workspace / RUN_HISTORY_FILENAME
+
+
+def load_run_history(config: dict) -> list[dict]:
+    """Load previous pipeline run records."""
+    path = _history_path(config)
+    if path.exists():
+        try:
+            return json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            return []
+    return []
+
+
+def save_run_record(config: dict, record: dict) -> None:
+    """Append a run record to the history file. Keeps last 10 runs."""
+    history = load_run_history(config)
+    record["timestamp"] = datetime.now(timezone.utc).isoformat()
+    history.append(record)
+    history = history[-10:]  # keep last 10
+    _history_path(config).write_text(json.dumps(history, indent=2))
+    logger.info("Run record saved (%d total).", len(history))
+
+
+def build_history_context(config: dict, work_item_id: int) -> str:
+    """Build a markdown section summarizing previous runs for the same story."""
+    history = load_run_history(config)
+    relevant = [r for r in history if r.get("work_item_id") == work_item_id]
+    if not relevant:
+        return ""
+
+    lines = ["## Previous Run History\n"]
+    for i, run in enumerate(relevant, 1):
+        ts = run.get("timestamp", "unknown")
+        failed_stage = run.get("failed_stage", "none")
+        error = run.get("error", "")
+        method = run.get("method", "")
+        lines.append(f"### Run {i} ({ts})")
+        lines.append(f"- **Result:** {'FAILED at ' + failed_stage if failed_stage else 'SUCCESS'}")
+        if method:
+            lines.append(f"- **Method:** {method}")
+        if error:
+            lines.append(f"- **Error:** {error[:500]}")
+        ai_output = run.get("ai_output", "")
+        if ai_output:
+            lines.append(f"- **AI output preview:** {ai_output[:300]}")
+        lines.append("")
+
+    lines.append(
+        "> Use the above history to avoid repeating mistakes. "
+        "If a previous approach failed, try a different strategy.\n"
+    )
+    return "\n".join(lines)

@@ -69,6 +69,11 @@ class AzureDevOpsClient:
 
     def fetch_latest_story(self) -> WorkItem | None:
         """Fetch the latest work item matching filters."""
+        stories = self.fetch_all_stories()
+        return stories[0] if stories else None
+
+    def fetch_all_stories(self) -> list[WorkItem]:
+        """Fetch all work items matching filters (ordered by CreatedDate DESC)."""
         wiql = self._build_wiql()
         logger.info("Querying Azure DevOps for stories tagged '%s'...", self.auto_tag)
         logger.debug("WIQL: %s", wiql)
@@ -82,17 +87,23 @@ class AzureDevOpsClient:
             ])
         except RuntimeError as e:
             logger.error("Failed to query Azure DevOps: %s", e)
-            return None
+            return []
 
         if not results:
             logger.info("No matching stories found.")
-            return None
+            return []
 
-        # Take the first result (most recently created).
-        item = results[0]
-        work_item_id = item.get("id") or item.get("fields", {}).get("System.Id")
-        logger.info("Found work item #%s", work_item_id)
-        return self.get_work_item_details(work_item_id)
+        stories = []
+        for item in results:
+            work_item_id = item.get("id") or item.get("fields", {}).get("System.Id")
+            if work_item_id:
+                try:
+                    stories.append(self.get_work_item_details(work_item_id))
+                except Exception as e:
+                    logger.warning("Failed to fetch details for #%s: %s", work_item_id, e)
+
+        logger.info("Found %d matching story/stories.", len(stories))
+        return stories
 
     def get_work_item_details(self, work_item_id: int) -> WorkItem:
         """Fetch full details for a work item."""
@@ -158,6 +169,27 @@ class AzureDevOpsClient:
             "--org", self.org,
             "--state", state,
         ])
+
+    def add_comment(self, work_item_id: int, comment_html: str) -> bool:
+        """Add a discussion comment to a work item via the REST API."""
+        import json as _json
+        import os
+
+        logger.info("Adding comment to work item #%s...", work_item_id)
+
+        # The `az boards work-item update` with --discussion field adds history comments.
+        try:
+            _run_az([
+                "boards", "work-item", "update",
+                "--id", str(work_item_id),
+                "--org", self.org,
+                "--discussion", comment_html,
+            ])
+            logger.info("Comment added to #%s.", work_item_id)
+            return True
+        except RuntimeError as e:
+            logger.error("Failed to add comment to #%s: %s", work_item_id, e)
+            return False
 
     def _fetch_comments(self, work_item_id: int) -> list[dict[str, str]]:
         """Fetch discussion comments from work item history."""

@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DevOps AI Agent — Pipeline Dashboard</title>
+    <style>
+        :root {
+            --bg: #0d1117;
+            --surface: #161b22;
+            --border: #30363d;
+            --text: #e6edf3;
+            --text-muted: #8b949e;
+            --accent: #58a6ff;
+            --green: #3fb950;
+            --red: #f85149;
+            --yellow: #d29922;
+            --blue: #58a6ff;
+            --purple: #bc8cff;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+        }
+        .container { max-width: 1000px; margin: 0 auto; padding: 24px; }
+
+        /* Header */
+        header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 0;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 24px;
+        }
+        header h1 { font-size: 20px; font-weight: 600; }
+        header h1 span { color: var(--accent); }
+        .status-dot {
+            width: 10px; height: 10px; border-radius: 50%;
+            display: inline-block; margin-right: 8px;
+        }
+        .status-dot.connected { background: var(--green); }
+        .status-dot.disconnected { background: var(--red); }
+
+        /* Controls */
+        .controls {
+            display: flex; gap: 12px; margin-bottom: 24px; flex-wrap: wrap;
+            align-items: center;
+        }
+        .controls input[type="number"] {
+            background: var(--surface); border: 1px solid var(--border);
+            color: var(--text); padding: 8px 12px; border-radius: 6px;
+            width: 140px; font-size: 14px;
+        }
+        .controls label { font-size: 14px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
+        .controls input[type="checkbox"] { accent-color: var(--accent); }
+        button {
+            padding: 8px 18px; border-radius: 6px; border: 1px solid var(--border);
+            background: var(--surface); color: var(--text); cursor: pointer;
+            font-size: 14px; font-weight: 500; transition: all .15s;
+        }
+        button:hover { border-color: var(--accent); color: var(--accent); }
+        button.primary { background: #238636; border-color: #238636; color: #fff; }
+        button.primary:hover { background: #2ea043; }
+        button.danger { background: #da3633; border-color: #da3633; color: #fff; }
+        button.danger:hover { background: #f85149; }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        /* Story card */
+        .story-card {
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 8px; padding: 16px; margin-bottom: 24px;
+            display: none;
+        }
+        .story-card.visible { display: block; }
+        .story-card h3 { font-size: 16px; margin-bottom: 8px; }
+        .story-card h3 .sid { color: var(--green); font-weight: 700; }
+        .story-meta { display: flex; gap: 16px; font-size: 13px; color: var(--text-muted); flex-wrap: wrap; }
+        .story-meta .tag {
+            background: #1f6feb33; color: var(--blue); padding: 2px 8px;
+            border-radius: 12px; font-size: 12px;
+        }
+        .story-desc { margin-top: 12px; font-size: 14px; color: var(--text-muted); max-height: 100px; overflow: auto; }
+
+        /* Pipeline progress bar */
+        .progress-bar {
+            display: flex; align-items: center; gap: 4px;
+            margin-bottom: 24px; overflow-x: auto; padding: 4px 0;
+        }
+        .progress-step {
+            display: flex; align-items: center; gap: 4px;
+            font-size: 12px; white-space: nowrap;
+        }
+        .progress-step .dot {
+            width: 24px; height: 24px; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 12px; font-weight: 700;
+            background: var(--border); color: var(--text-muted);
+            transition: all .3s;
+        }
+        .progress-step .dot.running { background: var(--yellow); color: #000; animation: pulse 1.5s infinite; }
+        .progress-step .dot.pass { background: var(--green); color: #000; }
+        .progress-step .dot.fail { background: var(--red); color: #fff; }
+        .progress-step .dot.skipped { background: var(--purple); color: #fff; }
+        .progress-step .line {
+            width: 30px; height: 2px; background: var(--border);
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* Stage cards */
+        .stage-card {
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 8px; margin-bottom: 12px; overflow: hidden;
+            transition: border-color .3s;
+        }
+        .stage-card.running { border-color: var(--yellow); }
+        .stage-card.pass { border-color: var(--green); }
+        .stage-card.fail { border-color: var(--red); }
+        .stage-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 12px 16px; cursor: pointer; user-select: none;
+        }
+        .stage-header:hover { background: #1c2128; }
+        .stage-header .left { display: flex; align-items: center; gap: 10px; }
+        .stage-icon { font-size: 18px; }
+        .stage-name { font-weight: 600; font-size: 14px; }
+        .stage-status {
+            font-size: 12px; padding: 2px 10px; border-radius: 12px;
+            font-weight: 600; text-transform: uppercase;
+        }
+        .stage-status.pending { background: var(--border); color: var(--text-muted); }
+        .stage-status.running { background: #d2992233; color: var(--yellow); }
+        .stage-status.pass { background: #3fb95033; color: var(--green); }
+        .stage-status.fail { background: #f8514933; color: var(--red); }
+        .stage-status.skipped { background: #bc8cff33; color: var(--purple); }
+        .stage-body {
+            padding: 0 16px; max-height: 0; overflow: hidden;
+            transition: max-height .3s ease, padding .3s ease;
+        }
+        .stage-card.expanded .stage-body { max-height: 600px; padding: 0 16px 16px; overflow: auto; }
+        .stage-detail { font-size: 13px; color: var(--text-muted); margin-top: 4px; }
+        .stage-detail pre {
+            background: var(--bg); padding: 10px; border-radius: 6px;
+            font-size: 12px; overflow-x: auto; margin-top: 8px; white-space: pre-wrap;
+        }
+
+        /* Consent Modal */
+        .modal-overlay {
+            display: none; position: fixed; inset: 0;
+            background: rgba(0,0,0,.7); z-index: 1000;
+            align-items: center; justify-content: center;
+        }
+        .modal-overlay.visible { display: flex; }
+        .modal {
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 12px; padding: 24px; max-width: 600px; width: 90%;
+            max-height: 80vh; overflow-y: auto;
+        }
+        .modal h2 { font-size: 18px; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+        .modal .data-item { padding: 6px 0; font-size: 14px; border-bottom: 1px solid var(--border); }
+        .modal .data-label { color: var(--accent); font-weight: 600; }
+        .modal .warning-box {
+            background: #f8514922; border: 1px solid var(--red); border-radius: 8px;
+            padding: 12px; margin: 12px 0;
+        }
+        .modal .safe-box {
+            background: #3fb95022; border: 1px solid var(--green); border-radius: 8px;
+            padding: 12px; margin: 12px 0; color: var(--green);
+        }
+        .modal .actions { display: flex; gap: 12px; margin-top: 16px; justify-content: flex-end; }
+        .modal .payload-preview {
+            background: var(--bg); padding: 10px; border-radius: 6px;
+            font-size: 12px; max-height: 200px; overflow: auto; margin-top: 12px;
+            display: none; white-space: pre-wrap; font-family: monospace;
+        }
+        .modal .payload-preview.visible { display: block; }
+
+        /* Story Queue panel */
+        .queue-panel {
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 8px; margin-bottom: 24px; display: none;
+        }
+        .queue-panel.visible { display: block; }
+        .queue-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 12px 16px; border-bottom: 1px solid var(--border);
+        }
+        .queue-header h3 { font-size: 15px; font-weight: 600; }
+        .queue-counter {
+            font-size: 12px; background: var(--accent); color: #000;
+            padding: 2px 8px; border-radius: 10px; font-weight: 700;
+        }
+        .queue-list { padding: 0; margin: 0; list-style: none; max-height: 300px; overflow-y: auto; }
+        .queue-item {
+            display: flex; align-items: center; gap: 10px;
+            padding: 10px 16px; border-bottom: 1px solid var(--border);
+            font-size: 13px; transition: background .15s;
+        }
+        .queue-item:last-child { border-bottom: none; }
+        .queue-item:hover { background: #1c2128; }
+        .queue-item .q-icon { font-size: 16px; flex-shrink: 0; }
+        .queue-item .q-id { color: var(--green); font-weight: 700; min-width: 70px; }
+        .queue-item .q-title { flex: 1; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .queue-item .q-status {
+            font-size: 11px; padding: 2px 8px; border-radius: 10px;
+            font-weight: 600; text-transform: uppercase; flex-shrink: 0;
+        }
+        .queue-item .q-status.queued { background: var(--border); color: var(--text-muted); }
+        .queue-item .q-status.in_progress { background: #d2992233; color: var(--yellow); }
+        .queue-item .q-status.done { background: #3fb95033; color: var(--green); }
+        .queue-item .q-status.failed { background: #f8514933; color: var(--red); }
+        .queue-item.selected { background: #1f6feb22; border-left: 3px solid var(--accent); }
+        .queue-item.current { background: #d2992211; }
+        .viewing-indicator {
+            display: none; font-size: 13px; color: var(--accent);
+            padding: 4px 12px; background: #1f6feb22; border-radius: 6px;
+            margin-bottom: 12px; align-items: center; gap: 8px;
+        }
+        .viewing-indicator button {
+            font-size: 12px; padding: 2px 10px; margin-left: 8px;
+        }
+
+        /* Toast / Alert stack */
+        .toast-container {
+            position: fixed; bottom: 20px; right: 20px;
+            display: flex; flex-direction: column-reverse; gap: 8px;
+            z-index: 1001; max-width: 420px;
+        }
+        .toast {
+            background: var(--surface); border: 1px solid var(--border);
+            padding: 12px 20px; border-radius: 8px; font-size: 14px;
+            animation: slideIn .3s ease; position: relative;
+            display: flex; align-items: center; gap: 10px;
+        }
+        .toast.success { border-color: var(--green); }
+        .toast.error { border-color: var(--red); }
+        .toast.warning { border-color: var(--yellow); }
+        .toast.info { border-color: var(--accent); }
+        .toast .toast-icon { font-size: 18px; }
+        .toast .toast-close {
+            margin-left: auto; cursor: pointer; color: var(--text-muted);
+            font-size: 16px; padding: 0 4px;
+        }
+        .toast .toast-close:hover { color: var(--text); }
+        @keyframes slideIn { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        @keyframes fadeOut { from { opacity: 1; } to { opacity: 0; transform: translateY(10px); } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🤖 <span>DevOps AI Agent</span> — Pipeline Dashboard</h1>
+            <div id="connection-status">
+                <span class="status-dot disconnected" id="sse-dot"></span>
+                <span id="sse-label" style="font-size:13px;color:var(--text-muted)">Connecting...</span>
+            </div>
+        </header>
+
+        <!-- Controls -->
+        <div class="controls">
+            <input type="number" id="storyId" placeholder="Story ID (optional)">
+            <label><input type="checkbox" id="skipTests"> Skip tests</label>
+            <label><input type="checkbox" id="dryRun"> Dry run</label>
+            <button onclick="fetchStory()">📥 Fetch Story</button>
+            <button class="primary" onclick="runPipeline()" id="runBtn">▶ Run Pipeline</button>
+            <button onclick="fetchAllStories()">📋 Fetch All</button>
+            <button class="primary" onclick="runAll()" id="runAllBtn">▶▶ Run All</button>
+        </div>
+
+        <!-- Story Queue panel -->
+        <div class="queue-panel" id="queuePanel">
+            <div class="queue-header">
+                <h3>📋 Story Queue</h3>
+                <span class="queue-counter" id="queueCounter">0</span>
+            </div>
+            <ul class="queue-list" id="queueList"></ul>
+        </div>
+
+        <!-- Story card -->
+        <div class="story-card" id="storyCard">
+            <h3><span class="sid" id="storyIdLabel">#—</span> <span id="storyTitle">—</span></h3>
+            <div class="story-meta">
+                <span>Type: <strong id="storyType">—</strong></span>
+                <span>State: <strong id="storyState">—</strong></span>
+                <span id="storyTagsContainer"></span>
+            </div>
+            <div class="story-desc" id="storyDesc"></div>
+        </div>
+
+        <!-- Viewing indicator -->
+        <div class="viewing-indicator" id="viewingIndicator">
+            <span id="viewingLabel">Viewing: #—</span>
+            <button onclick="switchToLive()">↩ Back to Live</button>
+        </div>
+
+        <!-- Progress bar -->
+        <div class="progress-bar" id="progressBar"></div>
+
+        <!-- Stage cards -->
+        <div id="stageCards"></div>
+    </div>
+
+    <!-- Consent Modal -->
+    <div class="modal-overlay" id="consentModal">
+        <div class="modal">
+            <h2>🔒 Data Consent Required</h2>
+            <div>
+                <div class="data-item"><span class="data-label">Action:</span> <span id="consentAction">—</span></div>
+                <div class="data-item"><span class="data-label">Provider:</span> <span id="consentProvider">—</span></div>
+                <div class="data-item"><span class="data-label">Model:</span> <span id="consentModel">—</span></div>
+                <div class="data-item"><span class="data-label">Payload size:</span> <span id="consentSize">—</span></div>
+            </div>
+            <h3 style="margin-top:16px;font-size:14px;">Data that will be sent:</h3>
+            <div id="consentDataList"></div>
+            <div id="consentSecurityBox"></div>
+            <div>
+                <button onclick="togglePayloadPreview()" style="margin-top:8px;font-size:12px;">👁 View Payload</button>
+                <div class="payload-preview" id="consentPayload"></div>
+            </div>
+            <div class="actions">
+                <button class="danger" onclick="respondConsent(false)">✗ Deny</button>
+                <button class="primary" onclick="respondConsent(true)">✓ Approve &amp; Send</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast / Alert stack -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script>
+        // --- Stage definitions ---
+        const STAGES = [
+            { id: 'fetch_story',    icon: '📥', name: 'Fetch Story' },
+            { id: 'build_context',  icon: '📋', name: 'Build Context' },
+            { id: 'analyze',        icon: '🔬', name: 'AI Analysis' },
+            { id: 'write_back',     icon: '📝', name: 'Write-back' },
+            { id: 'create_branch',  icon: '🌿', name: 'Create Branch' },
+            { id: 'implement',      icon: '🤖', name: 'AI Implement' },
+            { id: 'commit',         icon: '💾', name: 'Commit' },
+            { id: 'test',           icon: '🧪', name: 'Tests' },
+            { id: 'review',         icon: '🔍', name: 'AI Review' },
+            { id: 'complete',       icon: '✅', name: 'Complete' },
+        ];
+
+        let stageStates = {};  // stageId -> {status, title, details}  (currently displayed)
+        let allStoryStages = {};  // storyId -> { stageId -> {status, title, details} }
+        let currentStoryId = null;  // Story being processed right now
+        let selectedStoryId = null;  // Story the user clicked to view (null = live/current)
+
+        // --- Init ---
+        function init() {
+            renderProgressBar();
+            renderStageCards();
+            connectSSE();
+        }
+
+        // --- SSE ---
+        let eventSource = null;
+        function connectSSE() {
+            eventSource = new EventSource('/api/events');
+            eventSource.onopen = () => {
+                document.getElementById('sse-dot').className = 'status-dot connected';
+                document.getElementById('sse-label').textContent = 'Connected';
+            };
+            eventSource.onmessage = (e) => {
+                const event = JSON.parse(e.data);
+                handleEvent(event);
+            };
+            eventSource.onerror = () => {
+                document.getElementById('sse-dot').className = 'status-dot disconnected';
+                document.getElementById('sse-label').textContent = 'Reconnecting...';
+            };
+        }
+
+        // --- Event handler ---
+        function handleEvent(event) {
+            const { stage, status, title, details } = event;
+
+            // Handle alert events as toast notifications.
+            if (stage === 'alert') {
+                showToast(title, status);  // status = success/error/warning/info
+                return;
+            }
+
+            // Handle queue events — update queue panel.
+            if (stage === 'queue') {
+                updateQueuePanel(status, title, details);
+                return;
+            }
+
+            // When a new fetch_story begins, reset currentStoryId so we don't
+            // store events under the previous story's ID.
+            if (stage === 'fetch_story' && status === 'running') {
+                currentStoryId = null;
+            }
+
+            // Track the current story ID from fetch_story pass events.
+            if (stage === 'fetch_story' && status === 'pass' && details && details.id) {
+                currentStoryId = details.id;
+                if (!allStoryStages[currentStoryId]) {
+                    allStoryStages[currentStoryId] = {};
+                }
+            }
+
+            // Store event under the current story.
+            if (currentStoryId) {
+                allStoryStages[currentStoryId][stage] = { status, title, details };
+            }
+
+            // Update live display if user is viewing current story (or no selection).
+            if (!selectedStoryId || selectedStoryId === currentStoryId) {
+                stageStates[stage] = { status, title, details };
+
+                // Update story card if fetch_story passes.
+                if (stage === 'fetch_story' && status === 'pass' && details) {
+                    showStoryCard(details);
+                }
+
+                // Check if consent_required.
+                if (status === 'consent_required') {
+                    showConsentModal(details);
+                    return;
+                }
+
+                updateProgressBar();
+                updateStageCard(stage, status, title, details);
+            }
+
+            // Re-enable run button on complete or fail.
+            if (stage === 'complete' || status === 'fail') {
+                document.getElementById('runBtn').disabled = false;
+            }
+        }
+
+        // --- Story card ---
+        function showStoryCard(d) {
+            const card = document.getElementById('storyCard');
+            card.classList.add('visible');
+            document.getElementById('storyIdLabel').textContent = '#' + d.id;
+            document.getElementById('storyTitle').textContent = d.title;
+            document.getElementById('storyType').textContent = d.type || '—';
+            document.getElementById('storyState').textContent = d.state || '—';
+            document.getElementById('storyDesc').textContent = d.description || '';
+
+            const tagsEl = document.getElementById('storyTagsContainer');
+            tagsEl.innerHTML = '';
+            if (d.tags) {
+                d.tags.split(';').map(t => t.trim()).filter(Boolean).forEach(tag => {
+                    const span = document.createElement('span');
+                    span.className = 'tag';
+                    span.textContent = tag;
+                    tagsEl.appendChild(span);
+                });
+            }
+
+            // Auto-fill story ID.
+            if (d.id) document.getElementById('storyId').value = d.id;
+        }
+
+        function resetStoryCard(storyId) {
+            const card = document.getElementById('storyCard');
+            card.classList.add('visible');
+            document.getElementById('storyIdLabel').textContent = '#' + (storyId || '—');
+            document.getElementById('storyTitle').textContent = '—';
+            document.getElementById('storyType').textContent = '—';
+            document.getElementById('storyState').textContent = '—';
+            document.getElementById('storyDesc').textContent = '';
+            document.getElementById('storyTagsContainer').innerHTML = '';
+        }
+
+        // --- Progress bar ---
+        function renderProgressBar() {
+            const bar = document.getElementById('progressBar');
+            bar.innerHTML = STAGES.map((s, i) => {
+                const line = i < STAGES.length - 1 ? '<div class="line"></div>' : '';
+                return `<div class="progress-step">
+                    <div class="dot" id="prog-${s.id}" title="${s.name}">${s.icon}</div>
+                    ${line}
+                </div>`;
+            }).join('');
+        }
+
+        function updateProgressBar() {
+            STAGES.forEach(s => {
+                const dot = document.getElementById('prog-' + s.id);
+                const state = stageStates[s.id];
+                dot.className = 'dot' + (state ? ' ' + state.status : '');
+            });
+        }
+
+        // --- Stage cards ---
+        function renderStageCards() {
+            const container = document.getElementById('stageCards');
+            container.innerHTML = STAGES.map(s => `
+                <div class="stage-card" id="card-${s.id}">
+                    <div class="stage-header" onclick="toggleCard('${s.id}')">
+                        <div class="left">
+                            <span class="stage-icon">${s.icon}</span>
+                            <span class="stage-name">${s.name}</span>
+                        </div>
+                        <span class="stage-status pending" id="status-${s.id}">PENDING</span>
+                    </div>
+                    <div class="stage-body">
+                        <div class="stage-detail" id="detail-${s.id}"></div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function updateStageCard(stage, status, title, details) {
+            const card = document.getElementById('card-' + stage);
+            const statusEl = document.getElementById('status-' + stage);
+            const detailEl = document.getElementById('detail-' + stage);
+            if (!card) return;
+
+            card.className = 'stage-card ' + status;
+            statusEl.className = 'stage-status ' + status;
+            statusEl.textContent = status.toUpperCase();
+
+            let html = `<p>${escapeHtml(title)}</p>`;
+            if (details && typeof details === 'object') {
+                const keys = Object.keys(details);
+                if (keys.length > 0) {
+                    html += '<pre>' + escapeHtml(JSON.stringify(details, null, 2)) + '</pre>';
+                }
+            }
+            detailEl.innerHTML = html;
+
+            // Auto-expand running stage.
+            if (status === 'running') {
+                card.classList.add('expanded');
+            }
+        }
+
+        function toggleCard(stageId) {
+            document.getElementById('card-' + stageId).classList.toggle('expanded');
+        }
+
+        // --- API calls ---
+        async function fetchStory() {
+            const storyId = document.getElementById('storyId').value;
+
+            // Reset UI.
+            stageStates = {};
+            updateProgressBar();
+            renderStageCards();
+
+            showToast('Fetching story...');
+            const resp = await fetch('/api/fetch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ story_id: storyId || null }),
+            });
+            const data = await resp.json();
+            if (data.success) {
+                showStoryCard(data.story);
+                showToast('Story fetched: #' + data.story.id);
+            } else {
+                showToast('No story found: ' + (data.error || ''));
+            }
+        }
+
+        async function runPipeline() {
+            const storyId = document.getElementById('storyId').value;
+            const skipTests = document.getElementById('skipTests').checked;
+            const dryRun = document.getElementById('dryRun').checked;
+
+            // Reset UI.
+            stageStates = {};
+            updateProgressBar();
+            renderStageCards();
+
+            document.getElementById('runBtn').disabled = true;
+            showToast('Starting pipeline...');
+
+            const resp = await fetch('/api/run', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    story_id: storyId || null,
+                    skip_tests: skipTests,
+                    dry_run: dryRun,
+                }),
+            });
+            const data = await resp.json();
+            if (!data.success) {
+                showToast('Failed to start pipeline: ' + (data.error || ''));
+                document.getElementById('runBtn').disabled = false;
+            }
+        }
+
+        // --- Consent modal ---
+        function showConsentModal(d) {
+            document.getElementById('consentAction').textContent = d.action || '—';
+            document.getElementById('consentProvider').textContent = d.provider || '—';
+            document.getElementById('consentModel').textContent = d.model || '—';
+            document.getElementById('consentSize').textContent = (d.payload_length || 0).toLocaleString() + ' chars';
+
+            const listEl = document.getElementById('consentDataList');
+            listEl.innerHTML = '';
+            (d.data_summary || []).forEach(([label, desc]) => {
+                const div = document.createElement('div');
+                div.className = 'data-item';
+                div.innerHTML = `<span class="data-label">${escapeHtml(label)}</span> — ${escapeHtml(desc)}`;
+                listEl.appendChild(div);
+            });
+
+            const secBox = document.getElementById('consentSecurityBox');
+            if (d.secrets_found && d.secrets_found.length > 0) {
+                secBox.innerHTML = `<div class="warning-box"><strong>⚠ Security Warning:</strong><ul>` +
+                    d.secrets_found.map(s => `<li>${escapeHtml(s)}</li>`).join('') +
+                    `</ul></div>`;
+            } else {
+                secBox.innerHTML = `<div class="safe-box">✓ No obvious secrets or credentials detected.</div>`;
+            }
+
+            document.getElementById('consentPayload').textContent = d.payload_preview || '';
+            document.getElementById('consentModal').classList.add('visible');
+        }
+
+        function togglePayloadPreview() {
+            document.getElementById('consentPayload').classList.toggle('visible');
+        }
+
+        async function respondConsent(approved) {
+            document.getElementById('consentModal').classList.remove('visible');
+            await fetch('/api/consent/respond', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ approved }),
+            });
+            showToast(approved ? '✓ Consent granted' : '✗ Consent denied');
+        }
+
+        // --- Utilities ---
+        function escapeHtml(str) {
+            if (!str) return '';
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        function showToast(msg, type) {
+            type = type || 'info';
+            const icons = { success: '✅', error: '❌', warning: '⚠️', info: 'ℹ️' };
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = 'toast ' + type;
+            toast.innerHTML = `<span class="toast-icon">${icons[type] || icons.info}</span>` +
+                `<span>${escapeHtml(msg)}</span>` +
+                `<span class="toast-close" onclick="this.parentElement.remove()">✕</span>`;
+            container.appendChild(toast);
+            // Auto-remove after 6 seconds.
+            setTimeout(() => {
+                toast.style.animation = 'fadeOut .3s ease forwards';
+                setTimeout(() => toast.remove(), 300);
+            }, 6000);
+        }
+
+        // --- Queue panel ---
+        function switchToStory(storyId) {
+            selectedStoryId = storyId;
+            const stored = allStoryStages[storyId];
+            if (!stored) return;
+
+            // Load that story's stage data into the display.
+            stageStates = {};
+            renderStageCards();  // Reset to pending.
+            for (const [stage, data] of Object.entries(stored)) {
+                stageStates[stage] = data;
+                updateStageCard(stage, data.status, data.title, data.details);
+            }
+            updateProgressBar();
+
+            // Show the story card if fetch_story data exists, otherwise reset it.
+            if (stored.fetch_story && stored.fetch_story.details) {
+                showStoryCard(stored.fetch_story.details);
+            } else {
+                resetStoryCard(storyId);
+            }
+
+            // Highlight the selected queue item.
+            document.querySelectorAll('.queue-item').forEach(el => el.classList.remove('selected'));
+            const selectedEl = document.getElementById('q-item-' + storyId);
+            if (selectedEl) selectedEl.classList.add('selected');
+
+            // Show "viewing" indicator.
+            const indicator = document.getElementById('viewingIndicator');
+            document.getElementById('viewingLabel').textContent = `Viewing: #${storyId}`;
+            indicator.style.display = 'flex';
+        }
+
+        function switchToLive() {
+            selectedStoryId = null;
+            if (currentStoryId && allStoryStages[currentStoryId]) {
+                switchToStory(currentStoryId);
+                selectedStoryId = null;  // Back to live tracking.
+            }
+            document.querySelectorAll('.queue-item').forEach(el => el.classList.remove('selected'));
+            const indicator = document.getElementById('viewingIndicator');
+            indicator.style.display = 'none';
+        }
+
+        function updateQueuePanel(status, title, details) {
+            const panel = document.getElementById('queuePanel');
+            const list = document.getElementById('queueList');
+            const counter = document.getElementById('queueCounter');
+
+            if (!details || !details.stories) return;
+
+            panel.classList.add('visible');
+            counter.textContent = details.total || details.stories.length;
+
+            const statusIcons = { queued: '🔵', in_progress: '🟡', done: '🟢', failed: '🔴' };
+
+            list.innerHTML = details.stories.map(s => {
+                const icon = statusIcons[s.status] || '⚪';
+                const isSelected = s.id === selectedStoryId ? ' selected' : '';
+                const isCurrent = s.id === currentStoryId && s.status === 'in_progress' ? ' current' : '';
+                return `<li class="queue-item${isSelected}${isCurrent}" id="q-item-${s.id}"
+                            onclick="switchToStory(${s.id})" style="cursor:pointer;">
+                    <span class="q-icon">${icon}</span>
+                    <span class="q-id">#${s.id}</span>
+                    <span class="q-title">${escapeHtml(s.title)}</span>
+                    <span class="q-status ${s.status}">${s.status.replace('_', ' ')}</span>
+                </li>`;
+            }).join('');
+
+            // Re-enable buttons on queue complete.
+            if (status === 'pass') {
+                document.getElementById('runAllBtn').disabled = false;
+                document.getElementById('runBtn').disabled = false;
+            }
+        }
+
+        async function fetchAllStories() {
+            showToast('Fetching all matching stories...', 'info');
+            const resp = await fetch('/api/fetch-all', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+            });
+            const data = await resp.json();
+            if (data.success && data.stories.length > 0) {
+                const panel = document.getElementById('queuePanel');
+                const list = document.getElementById('queueList');
+                const counter = document.getElementById('queueCounter');
+
+                panel.classList.add('visible');
+                counter.textContent = data.total;
+
+                list.innerHTML = data.stories.map(s =>
+                    `<li class="queue-item">
+                        <span class="q-icon">🔵</span>
+                        <span class="q-id">#${s.id}</span>
+                        <span class="q-title">${escapeHtml(s.title)}</span>
+                        <span class="q-status queued">queued</span>
+                    </li>`
+                ).join('');
+
+                showToast(`Found ${data.total} story/stories`, 'success');
+            } else {
+                showToast('No stories found matching criteria.', 'warning');
+            }
+        }
+
+        async function runAll() {
+            const skipTests = document.getElementById('skipTests').checked;
+            const dryRun = document.getElementById('dryRun').checked;
+
+            // Reset pipeline UI.
+            stageStates = {};
+            updateProgressBar();
+            renderStageCards();
+
+            document.getElementById('runAllBtn').disabled = true;
+            document.getElementById('runBtn').disabled = true;
+            showToast('Starting queue processing...', 'info');
+
+            const resp = await fetch('/api/run-all', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ skip_tests: skipTests, dry_run: dryRun }),
+            });
+            const data = await resp.json();
+            if (!data.success) {
+                showToast('Failed to start queue: ' + (data.error || ''), 'error');
+                document.getElementById('runAllBtn').disabled = false;
+                document.getElementById('runBtn').disabled = false;
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>

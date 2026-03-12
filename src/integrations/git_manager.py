@@ -60,15 +60,21 @@ class GitManager:
         logger.info("On branch %s, up to date.", self.base_branch)
 
     def create_feature_branch(self, work_item_id: int, title: str) -> str:
-        """Create and checkout a new feature branch."""
-        self.ensure_base_branch()
-
+        """Create and checkout a feature branch, reusing if it already exists."""
         # Sanitize title for branch name.
         slug = title.lower()
         slug = re.sub(r"[^a-z0-9]+", "-", slug)
         slug = re.sub(r"-+", "-", slug).strip("-")[:60]
         branch_name = f"{self.branch_prefix}/{work_item_id}-{slug}"
 
+        # Check if branch already exists locally.
+        existing = self._run("branch", "--list", branch_name)
+        if existing.strip():
+            logger.info("Branch %s already exists, switching to it.", branch_name)
+            self._run("checkout", branch_name)
+            return branch_name
+
+        self.ensure_base_branch()
         self._run("checkout", "-b", branch_name)
         logger.info("Created branch: %s", branch_name)
         return branch_name
@@ -100,6 +106,15 @@ class GitManager:
             logger.info("Pushed to origin/%s", branch)
 
         return True
+
+    def has_feature_branch(self, work_item_id: int, title: str) -> str | None:
+        """Check if a feature branch already exists for this work item."""
+        slug = title.lower()
+        slug = re.sub(r"[^a-z0-9]+", "-", slug)
+        slug = re.sub(r"-+", "-", slug).strip("-")[:60]
+        branch_name = f"{self.branch_prefix}/{work_item_id}-{slug}"
+        existing = self._run("branch", "--list", branch_name)
+        return branch_name if existing.strip() else None
 
     def get_diff(self, base: str | None = None) -> str:
         """Get the diff of changes from base branch."""

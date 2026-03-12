@@ -15,6 +15,7 @@ dependencies = [
     "openai>=1.50",
     "gitpython>=3.1",
     "watchdog>=4.0",
+    "python-dotenv>=1.0",
 ]
 
 [project.optional-dependencies]

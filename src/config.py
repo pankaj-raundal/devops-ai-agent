@@ -25,6 +25,15 @@ def load_config(config_dir: str | Path | None = None) -> dict[str, Any]:
 
     Priority: config.local.yaml > config.yaml > environment variables.
     """
+    # Load .env file if present (does not override existing env vars).
+    env_path = Path(__file__).parent.parent / ".env"
+    if env_path.exists():
+        try:
+            from dotenv import load_dotenv
+            load_dotenv(env_path, override=False)
+        except ImportError:
+            pass
+
     if config_dir is None:
         config_dir = Path(__file__).parent.parent / "config"
     else:
@@ -58,6 +67,7 @@ def _apply_env_overrides(config: dict) -> None:
         "ANTHROPIC_API_KEY": ("ai_agent", "anthropic_api_key"),
         "OPENAI_API_KEY": ("ai_agent", "openai_api_key"),
         "AZURE_DEVOPS_PAT": ("azure_devops", "pat"),
+        "GITHUB_TOKEN": ("ai_agent", "github_token"),
         "SLACK_WEBHOOK_URL": ("notifications", "slack_webhook"),
     }
     for env_var, path in env_map.items():
