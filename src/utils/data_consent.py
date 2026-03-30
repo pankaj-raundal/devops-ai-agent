@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import json
 import re
+from datetime import datetime, timezone
+from pathlib import Path
 
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
 console = Console()
+
+_CONSENT_FILE = Path(".dai") / "consent.json"
 
 # Patterns that might indicate sensitive data.
 _SENSITIVE_PATTERNS = [
@@ -43,6 +48,9 @@ def request_consent(
 ) -> bool:
     """Display data summary, scan for secrets, and ask for user consent.
 
+    If the user previously approved this provider, skips the prompt and returns True.
+    On approval, persists consent for future calls.
+
     Args:
         action: What the AI will do (e.g. "Implement story", "Review code").
         provider: AI provider name.
@@ -53,6 +61,10 @@ def request_consent(
     Returns:
         True if user approves, False otherwise.
     """
+    # Skip prompt if user previously approved this provider.
+    if has_persisted_consent(provider):
+        return True
+
     console.print()
     console.rule("[bold yellow]🔒 Data Consent Required[/]")
     console.print()
@@ -109,7 +121,42 @@ def request_consent(
 
     if answer in ("y", "yes", ""):
         console.print("[green]✓ Consent granted — sending to AI.[/]")
+        save_consent(provider)
         return True
 
     console.print("[red]✗ Consent denied — skipping AI call.[/]")
     return False
+
+
+def has_persisted_consent(provider: str) -> bool:
+    """Check if the user has previously granted consent for this provider."""
+    if not _CONSENT_FILE.exists():
+        return False
+    try:
+        data = json.loads(_CONSENT_FILE.read_text())
+        return data.get(provider, {}).get("approved", False)
+    except (json.JSONDecodeError, OSError):
+        return False
+
+
+def save_consent(provider: str) -> None:
+    """Persist consent approval for a provider."""
+    _CONSENT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    data = {}
+    if _CONSENT_FILE.exists():
+        try:
+            data = json.loads(_CONSENT_FILE.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    data[provider] = {
+        "approved": True,
+        "approved_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _CONSENT_FILE.write_text(json.dumps(data, indent=2))
+
+
+def reset_consent() -> None:
+    """Remove all persisted consent."""
+    if _CONSENT_FILE.exists():
+        _CONSENT_FILE.unlink()
+        console.print("[yellow]All consent records cleared.[/]")

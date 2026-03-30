@@ -52,11 +52,21 @@ ai_agent:
   provider: "anthropic"        # "anthropic", "openai", or "copilot"
   model: "claude-sonnet-4-20250514"  # Model to use for implementation
   review_model: "claude-sonnet-4-20250514"  # Model to use for code review
-  require_consent: true        # Prompt user to review data before sending to AI
+  require_consent: true        # Prompt user to review data before sending to AI (persisted per-provider after first approval)
   # Approval mode controls how AI changes are applied:
   #   "plan-review" (default) — AI generates a plan, you review & approve each file before it's written
   #   "auto"                  — AI executes directly (Claude CLI / Codex CLI / API writes files)
   approval_mode: "plan-review"
+  # Trust levels control how many manual gates are active:
+  #   "cautious"    — all gates: consent + plan approval + push confirmation (default)
+  #   "balanced"    — skip consent, keep plan + push approval
+  #   "autonomous"  — skip consent + plan, keep push confirmation only
+  #   "full-auto"   — no gates, fully unattended (for CI/CD or overnight batch runs)
+  trust_level: "cautious"
+  # Iterative fix loop: when tests fail, feed errors back to AI for auto-fix attempts.
+  max_fix_attempts: 3          # Max test→fix→retest cycles (1 = no retry, just fail)
+  # Story quality gate: minimum quality score (1-10) before AI implementation proceeds.
+  min_story_quality: 4         # Stories scoring below this get feedback posted to ADO instead
   # API keys stored in environment:
   #   anthropic → ANTHROPIC_API_KEY
   #   openai   → OPENAI_API_KEY

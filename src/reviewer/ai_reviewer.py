@@ -59,6 +59,9 @@ class AIReviewer:
         self.model = ai.get("model", "claude-sonnet-4-20250514")
         self.max_tokens = ai.get("max_tokens", 4096)
         self.require_consent = ai.get("require_consent", True)
+        trust_level = ai.get("trust_level", "cautious")
+        if trust_level in ("balanced", "autonomous", "full-auto"):
+            self.require_consent = False
         self._system_prompt = _build_review_prompt(config)
 
     def review(self, diff: str, story_context: str) -> dict:

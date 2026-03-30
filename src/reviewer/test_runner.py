@@ -148,6 +148,32 @@ class TestRunner:
         cmd = [self.container_cmd, "drush", "cr"]
         return self._exec("drush_cr", cmd)
 
+    def auto_fix_lint(self) -> list[str]:
+        """Run deterministic auto-fixers for lint tools. Returns list of tools that applied fixes."""
+        fixers = {
+            "phpcs": [self.container_cmd, "exec", "phpcbf", "--standard=Drupal,DrupalPractice",
+                      "--extensions=php,module,inc,install,test,profile,theme", self.module_path],
+            "ruff": ["ruff", "check", "--fix", self.module_path],
+            "eslint": ["npx", "eslint", "--fix", self.module_path],
+            "dotnet_format": ["dotnet", "format", self.module_path],
+        }
+        fixed = []
+        for tool, cmd in fixers.items():
+            if tool.replace("_", "") not in [c.replace("_", "") for c in self.checks]:
+                continue
+            try:
+                result = subprocess.run(
+                    cmd, cwd=self.workspace_dir,
+                    capture_output=True, text=True, timeout=120,
+                )
+                # phpcbf returns 1 when it fixes files (not an error).
+                if result.returncode in (0, 1) and result.stdout:
+                    logger.info("Auto-fix %s: %s", tool, result.stdout[:200])
+                    fixed.append(tool)
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                logger.debug("Auto-fixer %s not available, skipping.", tool)
+        return fixed
+
     def _exec(self, tool: str, cmd: list[str]) -> TestResult:
         """Execute a command and return a TestResult."""
         try:

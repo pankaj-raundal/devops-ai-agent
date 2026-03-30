@@ -23,6 +23,10 @@ class ImplementationAgent:
         self.max_tokens = ai.get("max_tokens", 8192)
         self.temperature = ai.get("temperature", 0.2)
         self.require_consent = ai.get("require_consent", True)
+        # Trust levels: balanced/autonomous/full-auto skip consent prompts.
+        trust_level = ai.get("trust_level", "cautious")
+        if trust_level in ("balanced", "autonomous", "full-auto"):
+            self.require_consent = False
         self.approval_mode = ai.get("approval_mode", "plan-review")  # "auto", "plan-review"
         self.workspace_dir = Path(config["project"]["workspace_dir"])
         self.module_path = config["project"].get("module_path", "")

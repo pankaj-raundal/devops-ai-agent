@@ -63,6 +63,12 @@ class Pipeline:
         self._plan_approval_callback: callable | None = None  # Set by dashboard for async approval.
         self._push_approval_callback: callable | None = None  # Set by dashboard for push confirmation.
 
+        # Phase 1 config: trust levels, fix loop, story quality.
+        ai_cfg = config.get("ai_agent", {})
+        self.trust_level = ai_cfg.get("trust_level", "cautious")
+        self.max_fix_attempts = ai_cfg.get("max_fix_attempts", 3)
+        self.min_story_quality = ai_cfg.get("min_story_quality", 4)
+
     def set_plan_approval_callback(self, callback: callable) -> None:
         """Set a callback for plan approval (used by dashboard).
 
@@ -179,6 +185,21 @@ class Pipeline:
         event_bus.emit(PipelineEvent("write_back", "pass", "Analysis posted to work item"))
 
         # --- Smart Flow Decision ---
+        # Check story quality before expensive implementation.
+        quality_score = self._assess_story_quality(work_item, analysis)
+        if quality_score < self.min_story_quality and analysis.requires_code_change:
+            logger.warning("Story quality too low (%d/%d). Posting feedback to ADO.", quality_score, 10)
+            quality_msg = self._build_quality_feedback(work_item, analysis, quality_score)
+            self._write_back_comment(work_item.id, zendesk_ticket_id, quality_msg)
+            event_bus.emit(PipelineEvent("analyze", "fail",
+                f"Story quality too low ({quality_score}/10) — posted feedback to ADO", {
+                    "quality_score": quality_score,
+                }))
+            self._emit_alert("warning", f"Story #{work_item.id} skipped: quality {quality_score}/10")
+            self._transition_state(work_item.id, self.state_on_no_code)
+            results.append(PipelineResult(Stage.ANALYZE, False, error=f"Story quality {quality_score}/10 (min: {self.min_story_quality})"))
+            return results
+
         if not analysis.requires_code_change:
             # No code change needed — summarize findings and complete.
             logger.info("AI determined no code change is required. Writing summary and completing.")
@@ -263,8 +284,14 @@ class Pipeline:
                         "plan": plan.to_dict(),
                     }))
 
-                # Get approval — via dashboard callback or CLI prompt.
-                plan = self._get_plan_approval(plan)
+                # Get approval — auto-approve in autonomous/full-auto trust, else prompt.
+                if self.trust_level in ("autonomous", "full-auto"):
+                    logger.info("Trust level '%s': auto-approving plan.", self.trust_level)
+                    for fc in plan.file_changes:
+                        fc.approved = True
+                    plan.approved = True
+                else:
+                    plan = self._get_plan_approval(plan)
 
                 if not plan.approved:
                     logger.info("Plan rejected by user.")
@@ -334,26 +361,82 @@ class Pipeline:
         else:
             event_bus.emit(PipelineEvent("commit", "pass", "No files changed"))
 
-        # --- Stage 5: Test ---
+        # --- Stage 5: Test (with iterative fix loop) ---
         if not skip_tests:
             event_bus.emit(PipelineEvent("test", "running", "Running tests..."))
             logger.info("=== Stage 5: Test ===")
+
             test_summary = self.test_runner.run_all(changed_files=changed if changed else None)
+
+            # --- Iterative fix loop: retry up to max_fix_attempts ---
+            attempt = 1
+            while not test_summary.all_passed and attempt < self.max_fix_attempts:
+                attempt += 1
+                logger.info("Test failures detected. Auto-fix attempt %d/%d...", attempt, self.max_fix_attempts)
+                event_bus.emit(PipelineEvent("test", "running",
+                    f"Fix attempt {attempt}/{self.max_fix_attempts} — feeding errors back to AI..."))
+
+                # Step 1: Try auto-fixing lint errors first (deterministic, no AI cost).
+                auto_fixed = self.test_runner.auto_fix_lint()
+                if auto_fixed:
+                    logger.info("Auto-lint-fix applied changes for: %s", ", ".join(auto_fixed))
+                    changed = self.git.get_changed_files()
+                    if changed:
+                        self.git.commit_changes(work_item.id, f"Auto-fix lint (attempt {attempt})")
+                    # Re-run tests after auto-fix.
+                    test_summary = self.test_runner.run_all(changed_files=changed if changed else None)
+                    if test_summary.all_passed:
+                        logger.info("Tests pass after auto-lint-fix.")
+                        break
+
+                # Step 2: Feed test errors back to AI for a fix attempt.
+                fix_context = (
+                    f"{full_context}\n\n"
+                    f"## Test Failures (Attempt {attempt}/{self.max_fix_attempts})\n\n"
+                    f"{test_summary.summary_text()}\n\n"
+                    f"Fix the code to resolve these test/lint failures. "
+                    f"Do not re-introduce previously fixed issues."
+                )
+                fix_result = self.implementer.implement(fix_context)
+                if fix_result.get("success"):
+                    # Apply fix — handle plan-review or direct mode.
+                    fix_plan = fix_result.get("plan")
+                    if fix_plan:
+                        # In autonomous/full-auto trust, auto-approve fix plans.
+                        if self.trust_level in ("autonomous", "full-auto"):
+                            for fc in fix_plan.file_changes:
+                                fc.approved = True
+                            fix_plan.approved = True
+                        else:
+                            fix_plan = self._get_plan_approval(fix_plan)
+                        if fix_plan.approved:
+                            apply_plan(fix_plan, self.workspace, self.implementer.module_path)
+                    changed = self.git.get_changed_files()
+                    if changed:
+                        self.git.commit_changes(work_item.id, f"Fix attempt {attempt}")
+                    test_summary = self.test_runner.run_all(changed_files=changed if changed else None)
+                else:
+                    logger.warning("Fix attempt %d: AI implementation failed.", attempt)
+                    break
+
             results.append(PipelineResult(Stage.TEST, test_summary.all_passed, details={
-                "summary": test_summary.summary_text()
+                "summary": test_summary.summary_text(),
+                "fix_attempts": attempt,
             }))
             status = "pass" if test_summary.all_passed else "fail"
             event_bus.emit(PipelineEvent("test", status, test_summary.summary_text()[:200], {
                 "summary": test_summary.summary_text(),
+                "fix_attempts": attempt,
             }))
             if not test_summary.all_passed:
-                logger.warning("Some tests failed:\n%s", test_summary.summary_text())
-                self._emit_alert("warning", f"Tests failed for #{work_item.id}")
+                logger.warning("Tests still failing after %d attempt(s):\n%s", attempt, test_summary.summary_text())
+                self._emit_alert("warning", f"Tests failed for #{work_item.id} after {attempt} attempt(s)")
                 save_run_record(self.config, {
                     "work_item_id": work_item.id,
                     "failed_stage": "test",
                     "method": impl_result.get("method", ""),
                     "error": test_summary.summary_text()[:500],
+                    "fix_attempts": attempt,
                     "ai_output": impl_result.get("output", "")[:300],
                 })
         else:
@@ -389,7 +472,11 @@ class Pipeline:
         event_bus.emit(PipelineEvent("push", "running", f"Branch {branch_name} ready — awaiting push confirmation..."))
         logger.info("=== Stage 7: Push Confirmation ===")
 
-        push_approved = self._get_push_approval(branch_name)
+        if self.trust_level == "full-auto":
+            logger.info("Trust level 'full-auto': auto-approving push.")
+            push_approved = True
+        else:
+            push_approved = self._get_push_approval(branch_name)
 
         if push_approved:
             try:
@@ -579,6 +666,79 @@ class Pipeline:
     def _emit_alert(self, alert_type: str, message: str) -> None:
         """Emit a dashboard alert event (success/error/warning/info)."""
         event_bus.emit(PipelineEvent("alert", alert_type, message, {"type": alert_type}))
+
+    def _assess_story_quality(self, work_item, analysis) -> int:
+        """Score story quality on a 1-10 scale based on available information."""
+        score = 0
+        desc = work_item.description or ""
+
+        # Has a description at all (2 points).
+        if len(desc.strip()) > 20:
+            score += 2
+        elif desc.strip():
+            score += 1
+
+        # Description length — more detail = higher quality (2 points).
+        if len(desc) > 200:
+            score += 2
+        elif len(desc) > 50:
+            score += 1
+
+        # Has acceptance criteria (2 points).
+        ac_keywords = ["acceptance criteria", "expected", "given", "when", "then", "should"]
+        desc_lower = desc.lower()
+        if any(kw in desc_lower for kw in ac_keywords):
+            score += 2
+
+        # AI confidence is high (1 point).
+        if analysis.confidence == "high":
+            score += 1
+
+        # AI identified specific affected areas (1 point).
+        if analysis.affected_areas and len(analysis.affected_areas) >= 1:
+            score += 1
+
+        # AI has no open questions (1 point).
+        if not analysis.questions:
+            score += 1
+
+        # Complexity is not unknown/unclear (1 point).
+        if analysis.estimated_complexity in ("trivial", "simple", "moderate", "complex"):
+            score += 1
+
+        return min(score, 10)
+
+    @staticmethod
+    def _build_quality_feedback(work_item, analysis, score: int) -> str:
+        """Build a markdown comment coaching the PM to improve story quality."""
+        issues = []
+        desc = work_item.description or ""
+
+        if len(desc.strip()) < 20:
+            issues.append("Description is too short or missing")
+        ac_keywords = ["acceptance criteria", "expected", "given", "when", "then", "should"]
+        if not any(kw in desc.lower() for kw in ac_keywords):
+            issues.append("No acceptance criteria found")
+        if analysis.confidence == "low":
+            issues.append("AI confidence is low — story may be ambiguous")
+        if analysis.questions:
+            issues.append(f"AI has {len(analysis.questions)} clarifying question(s)")
+
+        issues_md = "\n".join(f"- {i}" for i in issues) if issues else "- General quality below threshold"
+        questions_md = "\n".join(f"- {q}" for q in analysis.questions) if analysis.questions else ""
+
+        return (
+            f"## 📋 Story Quality Assessment\n\n"
+            f"**Score:** {score}/10 (minimum required: 4)\n\n"
+            f"This story needs more detail before AI implementation can proceed.\n\n"
+            f"### Issues Found\n{issues_md}\n\n"
+            + (f"### AI Questions\n{questions_md}\n\n" if questions_md else "")
+            + f"### Suggestions\n"
+            f"- Add acceptance criteria: *\"When X happens, Y should change to Z\"*\n"
+            f"- Describe the expected behavior in detail\n"
+            f"- Mention specific files or modules if known\n\n"
+            f"---\n*Generated by DevOps AI Agent*"
+        )
 
     def _transition_state(self, work_item_id: int, new_state: str) -> None:
         """Transition a work item to a new state. Skip if new_state is empty."""
