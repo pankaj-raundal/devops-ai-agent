@@ -11,6 +11,9 @@ import openai
 
 logger = logging.getLogger("devops_ai_agent.implement")
 
+# Maximum characters of file content to include in AI context (~7500 tokens).
+MAX_CONTEXT_CHARS = 30_000
+
 
 class ImplementationAgent:
     """AI agent that reads story context and implements code changes."""
@@ -205,53 +208,112 @@ class ImplementationAgent:
         return None
 
     def _api_plan(self, story_context: str) -> dict:
-        """Plan-review via API — AI has NO filesystem access.
+        """Plan-review via API — two-pass context-aware implementation.
 
-        Uses append strategy: AI returns only new code to add for existing
-        files.  The pipeline reads the existing file and appends the new code.
-        This avoids sending file contents in the prompt (token-efficient) and
-        prevents the AI from accidentally wiping existing code.
+        Pass 1 (file selection): AI identifies which files are relevant.
+        Pass 2 (implementation): AI sees actual file contents and produces a plan.
+
+        Files <500 lines → merge_strategy='replace' (AI provides complete file).
+        Files ≥500 lines → merge_strategy='append' (AI provides only additions).
+        Falls back to append-only strategy if file selection fails.
         """
         from .plan import PLAN_JSON_SCHEMA, parse_plan_response
 
-        logger.info("Using %s API for plan generation (append strategy)...", self.provider)
+        logger.info("Using %s API for plan generation (two-pass context-aware)...", self.provider)
 
         system_prompt = self._load_system_prompt()
         module_summary = self._get_module_summary()
 
-        plan_prompt = (
-            f"## Story Context\n\n{story_context}\n\n"
-            f"## Module Structure\n\n{module_summary}\n\n"
-            f"## Task\n\n"
-            f"Analyze this story and produce a **structured implementation plan** as JSON.\n"
-            f"Do NOT implement the changes yet — only provide the plan.\n\n"
-            f"**CRITICAL RULES for file changes (you do NOT have filesystem access):**\n"
-            f"- For NEW files (action=create): provide the FULL file content, set merge_strategy='replace'.\n"
-            f"- For EXISTING files (action=modify): provide ONLY the new code to ADD "
-            f"(new functions, hooks, use statements, etc.), NOT the full file. "
-            f"Set merge_strategy='append'. The pipeline will append your code to the existing file.\n"
-            f"- NEVER include existing code from the file — you do not have the file contents "
-            f"and guessing will destroy existing code.\n"
-            f"- If a modification absolutely requires replacing the entire file, "
-            f"set merge_strategy='replace' and provide the complete file content.\n\n"
-            f"Return ONLY valid JSON matching this schema:\n"
-            f"```json\n{PLAN_JSON_SCHEMA}\n```\n"
-        )
+        # --- Pass 1: File selection ---
+        selected_files = self._select_relevant_files(story_context, module_summary)
+
+        # --- Read selected files from disk ---
+        file_contents = ""
+        line_counts: dict[str, int] = {}
+        if selected_files:
+            logger.info("Pass 1 selected %d file(s): %s", len(selected_files), ", ".join(selected_files))
+            file_contents, line_counts = self._read_file_contents(selected_files)
+            logger.info("Read %d file(s) (%d chars).", len(line_counts), len(file_contents))
+
+        has_context = bool(file_contents)
+
+        # --- Pass 2: Implementation plan ---
+        if has_context:
+            small_files = [f for f, n in line_counts.items() if n < 500]
+            large_files = [f for f, n in line_counts.items() if n >= 500]
+
+            merge_rules = (
+                "**CRITICAL RULES for file changes (you HAVE the file contents above):**\n"
+                "- For NEW files (action='create'): provide FULL file content, set merge_strategy='replace'.\n"
+            )
+            if small_files:
+                merge_rules += (
+                    f"- For files UNDER 500 lines ({', '.join(small_files)}): provide the COMPLETE "
+                    f"updated file with your changes integrated into the existing code. "
+                    f"Set merge_strategy='replace'. Include ALL existing code plus your changes.\n"
+                )
+            if large_files:
+                merge_rules += (
+                    f"- For files 500+ lines ({', '.join(large_files)}): provide ONLY the new code "
+                    f"to ADD. Set merge_strategy='append'.\n"
+                )
+            merge_rules += (
+                "- IMPORTANT: For 'replace' strategy, you MUST include ALL existing code plus "
+                "your changes. Do NOT omit existing functions, classes, or imports.\n"
+            )
+
+            plan_prompt = (
+                f"## Story Context\n\n{story_context}\n\n"
+                f"## Current File Contents\n\n{file_contents}\n\n"
+                f"## Module Structure\n\n{module_summary}\n\n"
+                f"## Task\n\n"
+                f"Produce a **structured implementation plan** as JSON.\n\n"
+                f"{merge_rules}\n"
+                f"Return ONLY valid JSON matching this schema:\n"
+                f"```json\n{PLAN_JSON_SCHEMA}\n```\n"
+            )
+        else:
+            # No context — fall back to append-only strategy.
+            logger.info("No file context available — using append-only strategy.")
+            plan_prompt = (
+                f"## Story Context\n\n{story_context}\n\n"
+                f"## Module Structure\n\n{module_summary}\n\n"
+                f"## Task\n\n"
+                f"Analyze this story and produce a **structured implementation plan** as JSON.\n"
+                f"Do NOT implement the changes yet — only provide the plan.\n\n"
+                f"**CRITICAL RULES for file changes (you do NOT have filesystem access):**\n"
+                f"- For NEW files (action=create): provide the FULL file content, set merge_strategy='replace'.\n"
+                f"- For EXISTING files (action=modify): provide ONLY the new code to ADD "
+                f"(new functions, hooks, use statements, etc.), NOT the full file. "
+                f"Set merge_strategy='append'. The pipeline will append your code to the existing file.\n"
+                f"- NEVER include existing code from the file — you do not have the file contents "
+                f"and guessing will destroy existing code.\n"
+                f"- If a modification absolutely requires replacing the entire file, "
+                f"set merge_strategy='replace' and provide the complete file content.\n\n"
+                f"Return ONLY valid JSON matching this schema:\n"
+                f"```json\n{PLAN_JSON_SCHEMA}\n```\n"
+            )
 
         if self.require_consent:
             from src.utils.data_consent import request_consent
 
+            data_items = [
+                ("Story context", "Work item title, description, acceptance criteria, comments"),
+                ("Module file tree", f"{self.module_path} — file names and directory structure"),
+            ]
+            if has_context:
+                data_items.append(("File contents", f"{len(line_counts)} file(s) read from disk ({len(file_contents):,} chars)"))
+                data_items.append(("✅ Context-aware", "AI sees actual code — will produce accurate changes"))
+            data_items.extend([
+                ("System prompt", "Development instructions"),
+                ("✅ Safety", "AI will return a plan only — no files will be modified"),
+            ])
+
             approved = request_consent(
-                action="Generate implementation plan via API (no filesystem access)",
+                action=f"Generate plan via API ({'context-aware' if has_context else 'no filesystem access'})",
                 provider=self.provider,
                 model=self.model,
-                data_summary=[
-                    ("Story context", "Work item title, description, acceptance criteria, comments"),
-                    ("Module file tree", f"{self.module_path} — file names and directory structure"),
-                    ("System prompt", "Development instructions"),
-                    ("✅ Safety", "AI will return a plan only — no files will be modified"),
-                    ("✅ Token-efficient", "No file contents sent — AI returns only new code to add"),
-                ],
+                data_summary=data_items,
                 full_payload=system_prompt + "\n\n" + plan_prompt,
             )
             if not approved:
@@ -262,19 +324,16 @@ class ImplementationAgent:
                 }
 
         try:
-            if self.provider == "anthropic":
-                response = self._call_anthropic(system_prompt, plan_prompt)
-            elif self.provider == "copilot":
-                response = self._call_copilot(system_prompt, plan_prompt)
-            else:
-                response = self._call_openai(system_prompt, plan_prompt)
+            response = self._call_ai(system_prompt, plan_prompt)
 
             plan = parse_plan_response(response)
+            method = f"{self.provider}-plan(ctx)" if has_context else f"{self.provider}-plan"
             return {
                 "success": True,
-                "method": f"{self.provider}-plan",
+                "method": method,
                 "output": plan.to_markdown(),
                 "plan": plan,
+                "context_files": list(line_counts.keys()) if has_context else [],
             }
         except Exception as e:
             logger.error("AI plan generation failed: %s", e)
@@ -568,6 +627,92 @@ class ImplementationAgent:
             lines = lines[:200] + [f"... and {len(lines) - 200} more files"]
 
         return "```\n" + "\n".join(lines) + "\n```"
+
+    def _call_ai(self, system_prompt: str, user_prompt: str) -> str:
+        """Route AI call to the configured provider."""
+        if self.provider == "anthropic":
+            return self._call_anthropic(system_prompt, user_prompt)
+        elif self.provider == "copilot":
+            return self._call_copilot(system_prompt, user_prompt)
+        else:
+            return self._call_openai(system_prompt, user_prompt)
+
+    def _select_relevant_files(self, story_context: str, module_summary: str) -> list[str]:
+        """Pass 1 of context injection: ask AI which files to read."""
+        prompt = (
+            "Given this story and module file tree, return a JSON array of file paths "
+            "that you would need to READ to implement this story correctly.\n\n"
+            "Include:\n"
+            "- Files you would MODIFY\n"
+            "- Files you need to UNDERSTAND (interfaces, base classes, services)\n"
+            "- Configuration files that might need changes\n\n"
+            "Return ONLY a JSON array of relative file paths, nothing else. Example:\n"
+            '["src/MyService.php", "config/services.yml"]\n\n'
+            f"## Story\n\n{story_context}\n\n"
+            f"## Module Files\n\n{module_summary}"
+        )
+
+        system = "You are a file selection assistant. Return ONLY a JSON array of file paths. No explanation."
+
+        try:
+            response = self._call_ai(system, prompt)
+
+            import json as _json
+            import re as _re
+            text = response.strip()
+            fence = _re.search(r'```(?:json)?\s*\n(.*?)```', text, _re.DOTALL)
+            if fence:
+                text = fence.group(1).strip()
+            files = _json.loads(text)
+            if isinstance(files, list):
+                return [f for f in files if isinstance(f, str)][:20]
+        except Exception as e:
+            logger.warning("File selection pass failed: %s — will use append strategy", e)
+
+        return []
+
+    def _read_file_contents(self, file_paths: list[str]) -> tuple[str, dict[str, int]]:
+        """Read selected files from disk within the token budget.
+
+        Returns (formatted_content, {path: line_count}).
+        """
+        module_dir = self.workspace_dir / self.module_path
+        sections: list[str] = []
+        line_counts: dict[str, int] = {}
+        total_chars = 0
+
+        for rel_path in file_paths:
+            full_path = module_dir / rel_path
+            if not full_path.exists() or not full_path.is_file():
+                continue
+            # Security: ensure path stays within module directory.
+            try:
+                full_path.resolve().relative_to(module_dir.resolve())
+            except ValueError:
+                logger.warning("Skipping path outside module dir: %s", rel_path)
+                continue
+
+            try:
+                content = full_path.read_text()
+            except Exception as e:
+                logger.warning("Could not read %s: %s", rel_path, e)
+                continue
+
+            if total_chars + len(content) > MAX_CONTEXT_CHARS:
+                remaining = MAX_CONTEXT_CHARS - total_chars
+                if remaining > 500:
+                    content = content[:remaining] + "\n... (truncated)"
+                else:
+                    logger.info("Context budget reached — skipping remaining files.")
+                    break
+
+            lines = content.count("\n") + 1
+            line_counts[rel_path] = lines
+            sections.append(f"### {rel_path} ({lines} lines)\n```\n{content}\n```")
+            total_chars += len(content)
+
+        return "\n\n".join(sections), line_counts
+
 
 def _get_github_token() -> str:
     """Get a GitHub token — prefers `gh auth token` (OAuth), falls back to GITHUB_TOKEN env var."""

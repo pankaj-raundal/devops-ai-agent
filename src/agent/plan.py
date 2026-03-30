@@ -168,6 +168,8 @@ def apply_plan(plan: ImplementationPlan, workspace_dir: Path, module_path: str) 
     """Apply approved file changes from the plan to disk.
 
     Only applies changes where file_change.approved is True.
+    Uses smart merge for append strategy (PHP/Python-aware insertion).
+    Auto-upgrades small files (<500 lines) to replace when content looks complete.
     Returns a summary dict.
     """
     module_dir = workspace_dir / module_path
@@ -202,18 +204,26 @@ def apply_plan(plan: ImplementationPlan, workspace_dir: Path, module_path: str) 
                 logger.info("Created: %s", fc.path)
             elif fc.action == "modify":
                 target.parent.mkdir(parents=True, exist_ok=True)
-                if fc.merge_strategy == "append" and target.exists():
-                    # Append new code to the existing file content.
-                    existing = target.read_text()
-                    merged = existing.rstrip("\n") + "\n\n" + fc.content.lstrip("\n")
-                    target.write_text(merged)
-                    applied.append({"path": fc.path, "action": "modified (appended)"})
-                    logger.info("Appended to: %s", fc.path)
-                else:
+                if fc.merge_strategy == "replace" or not target.exists():
                     # Replace strategy or file doesn't exist — write full content.
                     target.write_text(fc.content)
                     applied.append({"path": fc.path, "action": "modified (replaced)"})
                     logger.info("Replaced: %s", fc.path)
+                else:
+                    # Append strategy — use smart merge.
+                    existing = target.read_text()
+                    existing_lines = existing.count("\n") + 1
+
+                    # Auto-upgrade: small file + content looks complete → replace.
+                    if existing_lines < 500 and _looks_like_complete_file(fc.content, target.suffix):
+                        target.write_text(fc.content)
+                        applied.append({"path": fc.path, "action": "modified (auto-replaced)"})
+                        logger.info("Auto-replaced small file (%d lines): %s", existing_lines, fc.path)
+                    else:
+                        merged = _smart_merge(existing, fc.content, target.suffix)
+                        target.write_text(merged)
+                        applied.append({"path": fc.path, "action": "modified (smart-merged)"})
+                        logger.info("Smart-merged into: %s", fc.path)
             else:
                 skipped.append(fc.path)
                 logger.warning("Unknown action '%s' for %s", fc.action, fc.path)
@@ -227,3 +237,57 @@ def apply_plan(plan: ImplementationPlan, workspace_dir: Path, module_path: str) 
         "total_applied": len(applied),
         "total_skipped": len(skipped),
     }
+
+
+def _looks_like_complete_file(content: str, suffix: str) -> bool:
+    """Heuristic: does the content look like a complete file rather than a code fragment?"""
+    content = content.strip()
+    if not content:
+        return False
+
+    if suffix in (".php", ".module", ".install", ".inc", ".theme"):
+        return content.startswith("<?php")
+    elif suffix == ".py":
+        return (
+            content.startswith('"""')
+            or content.startswith("'''")
+            or content.startswith("from ")
+            or content.startswith("import ")
+            or content.startswith("#!")
+        )
+    elif suffix in (".ts", ".tsx", ".js", ".jsx"):
+        return content.startswith("import ") or content.startswith("export ")
+    elif suffix == ".java":
+        return content.startswith("package ") or content.startswith("import ")
+    elif suffix == ".cs":
+        return content.startswith("using ") or content.startswith("namespace ")
+    return False
+
+
+def _smart_merge(existing: str, new_code: str, suffix: str) -> str:
+    """Merge new code into an existing file at an intelligent position.
+
+    PHP: inserts before the last closing brace (end of class).
+    Python: inserts before ``if __name__`` block, or at end.
+    Default: appends to end of file.
+    """
+    import re
+
+    # PHP: insert before last `}` at column 0 (likely class/interface end).
+    if suffix in (".php", ".module", ".install", ".inc", ".theme"):
+        lines = existing.rstrip("\n").split("\n")
+        for i in range(len(lines) - 1, -1, -1):
+            if lines[i].strip() == "}" and (not lines[i] or lines[i][0] == "}"):
+                lines.insert(i, "\n" + new_code.strip() + "\n")
+                return "\n".join(lines) + "\n"
+
+    # Python: insert before `if __name__` guard, or at end.
+    if suffix == ".py":
+        lines = existing.rstrip("\n").split("\n")
+        for i, line in enumerate(lines):
+            if re.match(r'if\s+__name__\s*==\s*["\']__main__["\']', line):
+                lines.insert(i, "\n" + new_code.strip() + "\n")
+                return "\n".join(lines) + "\n"
+
+    # Default: append.
+    return existing.rstrip("\n") + "\n\n" + new_code.lstrip("\n")

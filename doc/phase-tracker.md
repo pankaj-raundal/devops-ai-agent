@@ -12,7 +12,7 @@
 | Phase | Name | Status | Items | Completed |
 |-------|------|--------|-------|-----------|
 | 1 | Self-Correcting Pipeline | ✅ COMPLETE | 6 | 6/6 |
-| 2 | Context-Aware Implementation | 🔲 NOT STARTED | 3 | 0/3 |
+| 2 | Context-Aware Implementation | ✅ COMPLETE | 3 | 3/3 |
 | 3 | Multi-Framework & Multi-Platform | 🔲 NOT STARTED | 4 | 0/4 |
 | 4 | Batch Automation & Learning | 🔲 NOT STARTED | 5 | 0/5 |
 | 5 | Onboarding & Setup | 🔲 NOT STARTED | 2 | 0/2 |
@@ -38,15 +38,15 @@
 
 ---
 
-## Phase 2: Context-Aware Implementation 🔲 NOT STARTED
+## Phase 2: Context-Aware Implementation ✅ COMPLETE
 
 **Goal:** AI receives enough codebase context to produce correct code on first attempt, even without CLI filesystem access.
 
 | # | Item | Effort | Critic Issue | Status |
 |---|------|--------|--------------|--------|
-| 5 | Smart context injection — two-pass AI call: file selection → read files → implement with context | ~100 lines | #3 | 🔲 |
-| 6 | Diff-based merge strategy — replace naive append with unified diff application | ~50 lines | #3 | 🔲 |
-| 7 | Full-file replace for small files (<500 lines → `merge_strategy=replace`) | ~20 lines | #3 | 🔲 |
+| 5 | Smart context injection — two-pass AI call: file selection → read files → implement with context | ~100 lines | #3 | ✅ Done |
+| 6 | Diff-based merge strategy — smart merge with PHP/Python-aware insertion | ~50 lines | #3 | ✅ Done |
+| 7 | Full-file replace for small files (<500 lines → auto-upgrade to `merge_strategy=replace`) | ~20 lines | #3 | ✅ Done |
 
 **Note:** Item #8 (story quality scoring) was moved up to Phase 1 and completed there.
 
@@ -124,4 +124,5 @@
 
 | Date | Change |
 |------|--------|
+| 2026-03-30 | Phase 2 completed: two-pass context injection (_select_relevant_files + _read_file_contents), smart merge (_smart_merge for PHP/Python), auto-replace for small files (_looks_like_complete_file). 18 new tests, 26 total passing. |
 | 2026-03-30 | Phase 1 completed: iterative fix loop, auto-fix lint, trust levels, consent persistence, story quality scoring, config updates. All 8 tests passing. |
