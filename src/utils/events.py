@@ -61,7 +61,7 @@ class EventBus:
                 try:
                     q.put_nowait(event)
                 except queue.Full:
-                    pass  # Drop if subscriber is too slow.
+                    logger.warning("Event dropped for slow subscriber: [%s] %s", event.stage, event.title[:80])
 
     def clear_history(self) -> None:
         with self._lock:

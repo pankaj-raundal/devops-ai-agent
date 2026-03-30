@@ -131,11 +131,10 @@ def run_all(ctx, skip_tests, dry_run):
 @click.pass_context
 def implement(ctx):
     """Implement the current story (reads .current-story.md)."""
-    from .agent.context_builder import load_story_context
+    from .agent.context_builder import load_story_context, _DATA_DIR, CONTEXT_FILENAME
     from .agent.implement import ImplementationAgent
 
-    workspace = Path(ctx.obj["config"]["project"]["workspace_dir"])
-    context_path = workspace / ".current-story.md"
+    context_path = _DATA_DIR / CONTEXT_FILENAME
 
     if not context_path.exists():
         console.print("[red]No .current-story.md found. Run 'dai fetch' first.[/]")
@@ -164,20 +163,22 @@ def review(ctx):
 
     # Tests.
     console.print("[bold]Running tests...[/]")
+    git = GitManager(config)
+    changed_files = git.get_changed_files()
     runner = TestRunner(config)
-    summary = runner.run_all()
+    summary = runner.run_all(changed_files=changed_files if changed_files else None)
     console.print(summary.summary_text())
 
     # AI review.
     console.print("\n[bold]Running AI review...[/]")
-    git = GitManager(config)
     diff = git.get_diff()
     if not diff.strip():
         console.print("[yellow]No changes to review.[/]")
         return
 
     workspace = Path(config["project"]["workspace_dir"])
-    context_path = workspace / ".current-story.md"
+    from .agent.context_builder import _DATA_DIR, CONTEXT_FILENAME
+    context_path = _DATA_DIR / CONTEXT_FILENAME
     story_context = context_path.read_text() if context_path.exists() else ""
 
     reviewer = AIReviewer(config)

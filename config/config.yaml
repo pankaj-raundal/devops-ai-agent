@@ -6,9 +6,10 @@
 
 # --- Project Defaults ---
 project:
-  name: "my-drupal-project"
-  workspace_dir: ""            # Path to your local Drupal workspace
-  module_path: ""              # Relative path to the module under development
+  name: "my-project"
+  workspace_dir: ""            # Path to your local project workspace
+  module_path: ""              # Relative path to the package/module under development
+  framework: "drupal"          # Framework profile: drupal, python, react, java, dotnet, angular
   base_branch: "master"        # Branch to create feature branches from
   branch_prefix: "feature"     # Prefix for feature branches
 
@@ -52,6 +53,10 @@ ai_agent:
   model: "claude-sonnet-4-20250514"  # Model to use for implementation
   review_model: "claude-sonnet-4-20250514"  # Model to use for code review
   require_consent: true        # Prompt user to review data before sending to AI
+  # Approval mode controls how AI changes are applied:
+  #   "plan-review" (default) — AI generates a plan, you review & approve each file before it's written
+  #   "auto"                  — AI executes directly (Claude CLI / Codex CLI / API writes files)
+  approval_mode: "plan-review"
   # API keys stored in environment:
   #   anthropic → ANTHROPIC_API_KEY
   #   openai   → OPENAI_API_KEY
@@ -78,6 +83,9 @@ local_env:
 git:
   auto_commit: true
   auto_push: false             # Push to remote after commit
+  auto_pr: false               # Auto-create Pull Request after pipeline completes
+  pr_target_branch: ""         # PR target branch (empty = use project.base_branch)
+  test_scope: "changed"        # "changed" = lint/analyse only changed files, "all" = full module
   commit_message_template: "#{work_item_id} - {title}\n\n{description}"
 
 # --- Notifications ---

@@ -26,6 +26,8 @@ config/config.local.yaml
 logs/
 *.log
 .current-story.md
+.pipeline-history.json
+.dai/
 
 # OS
 .DS_Store

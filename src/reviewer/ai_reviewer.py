@@ -10,14 +10,9 @@ import openai
 logger = logging.getLogger("devops_ai_agent.ai_reviewer")
 
 REVIEW_SYSTEM_PROMPT = """\
-You are a senior Drupal developer performing a code review.
+You are a senior {framework_label} developer performing a code review.
 Review the provided git diff for:
-1. Correctness — does the code do what the story requires?
-2. Security — OWASP Top 10, SQL injection, XSS, access control.
-3. Drupal standards — PSR-12, Drupal coding conventions, proper DI.
-4. PHP 8.4 compatibility.
-5. Performance — unnecessary DB queries, N+1 issues, missing caching.
-6. Test coverage — are there tests for the changes?
+{review_criteria}
 
 Output a structured review with:
 - APPROVE / REQUEST_CHANGES / COMMENT
@@ -26,15 +21,45 @@ Output a structured review with:
 """
 
 
+def _build_review_prompt(config: dict) -> str:
+    """Build the review system prompt from the active framework profile.
+
+    Loads the review template from file if configured, otherwise uses
+    the built-in REVIEW_SYSTEM_PROMPT constant. Substitutes framework
+    placeholders in either case.
+    """
+    from pathlib import Path
+
+    from src.profiles import get_profile
+
+    profile = get_profile(config)
+
+    # Try loading template file first.
+    template_path = config.get("ai_agent", {}).get("review_prompt_template", "")
+    if template_path:
+        full_path = Path(__file__).parent.parent.parent / template_path
+        if full_path.exists():
+            template = full_path.read_text()
+            return template.replace("{coding_standard}", profile["coding_standard"])
+
+    # Fallback: built-in template with profile values.
+    return REVIEW_SYSTEM_PROMPT.format(
+        framework_label=profile["framework_label"],
+        review_criteria=profile["review_criteria"],
+    )
+
+
 class AIReviewer:
     """Sends diffs to an AI model for automated code review."""
 
     def __init__(self, config: dict):
         ai = config.get("ai_agent", {})
+        self.config = config
         self.provider = ai.get("provider", "anthropic")
         self.model = ai.get("model", "claude-sonnet-4-20250514")
         self.max_tokens = ai.get("max_tokens", 4096)
         self.require_consent = ai.get("require_consent", True)
+        self._system_prompt = _build_review_prompt(config)
 
     def review(self, diff: str, story_context: str) -> dict:
         """Review a diff against story context.
@@ -67,7 +92,7 @@ class AIReviewer:
                     ("Git diff", f"Code changes (~{len(diff):,} chars, truncated to 15k)"),
                     ("System prompt", "Code review instructions"),
                 ],
-                full_payload=REVIEW_SYSTEM_PROMPT + "\n\n" + prompt,
+                full_payload=self._system_prompt + "\n\n" + prompt,
             )
             if not approved:
                 return {
@@ -101,7 +126,7 @@ class AIReviewer:
             model=self.model,
             max_tokens=self.max_tokens,
             temperature=0.1,
-            system=REVIEW_SYSTEM_PROMPT,
+            system=self._system_prompt,
             messages=[{"role": "user", "content": prompt}],
         )
         return msg.content[0].text
@@ -113,14 +138,19 @@ class AIReviewer:
             max_tokens=self.max_tokens,
             temperature=0.1,
             messages=[
-                {"role": "system", "content": REVIEW_SYSTEM_PROMPT},
+                {"role": "system", "content": self._system_prompt},
                 {"role": "user", "content": prompt},
             ],
         )
         return resp.choices[0].message.content
 
     def _call_copilot(self, prompt: str) -> str:
-        """Call GitHub Models API — OpenAI-compatible, uses `gh auth token`."""
+        """Call GitHub Models API — OpenAI-compatible, uses `gh auth token`.
+
+        Retries up to 3 times with exponential backoff for transient errors.
+        """
+        import time
+
         from src.agent.implement import _get_github_token
 
         token = _get_github_token()
@@ -128,16 +158,31 @@ class AIReviewer:
             base_url="https://models.github.ai/inference/v1",
             api_key=token,
         )
-        resp = client.chat.completions.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            temperature=0.1,
-            messages=[
-                {"role": "system", "content": REVIEW_SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
-        )
-        return resp.choices[0].message.content
+
+        last_error = None
+        for attempt in range(3):
+            try:
+                resp = client.chat.completions.create(
+                    model=self.model,
+                    max_tokens=self.max_tokens,
+                    temperature=0.1,
+                    messages=[
+                        {"role": "system", "content": self._system_prompt},
+                        {"role": "user", "content": prompt},
+                    ],
+                )
+                return resp.choices[0].message.content
+            except (openai.RateLimitError, openai.APIConnectionError, openai.APITimeoutError) as e:
+                last_error = e
+                wait = 2 ** (attempt + 1)
+                logger.warning("Copilot review API attempt %d failed (%s), retrying in %ds...", attempt + 1, type(e).__name__, wait)
+                time.sleep(wait)
+            except openai.AuthenticationError:
+                raise RuntimeError(
+                    "GitHub token rejected by Models API. Run `gh auth login` or check GITHUB_TOKEN."
+                )
+
+        raise RuntimeError(f"Copilot review API failed after 3 attempts: {last_error}")
 
     @staticmethod
     def _extract_verdict(text: str) -> str:

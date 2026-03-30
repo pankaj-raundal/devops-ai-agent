@@ -86,18 +86,11 @@ class StoryAnalyzer:
             )
 
     def _call_ai(self, system_prompt: str, user_prompt: str) -> str:
-        """Call the configured AI provider."""
-        if self.provider == "copilot":
-            from .implement import _get_github_token
+        """Call the configured AI provider.
 
-            token = _get_github_token()
-            client = openai.OpenAI(
-                base_url="https://models.github.ai/inference/v1",
-                api_key=token,
-            )
-        elif self.provider == "openai":
-            client = openai.OpenAI()
-        elif self.provider == "anthropic":
+        Copilot provider retries up to 3 times with exponential backoff.
+        """
+        if self.provider == "anthropic":
             import anthropic
 
             anth = anthropic.Anthropic()
@@ -109,29 +102,62 @@ class StoryAnalyzer:
                 messages=[{"role": "user", "content": user_prompt}],
             )
             return msg.content[0].text
+
+        if self.provider == "copilot":
+            from .implement import _get_github_token
+
+            token = _get_github_token()
+            client = openai.OpenAI(
+                base_url="https://models.github.ai/inference/v1",
+                api_key=token,
+            )
+        elif self.provider == "openai":
+            client = openai.OpenAI()
         else:
             client = openai.OpenAI()
 
-        resp = client.chat.completions.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            temperature=self.temperature,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-        )
-        return resp.choices[0].message.content
+        import time
+
+        last_error = None
+        max_attempts = 3 if self.provider == "copilot" else 1
+        for attempt in range(max_attempts):
+            try:
+                resp = client.chat.completions.create(
+                    model=self.model,
+                    max_tokens=self.max_tokens,
+                    temperature=self.temperature,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                )
+                return resp.choices[0].message.content
+            except (openai.RateLimitError, openai.APIConnectionError, openai.APITimeoutError) as e:
+                last_error = e
+                wait = 2 ** (attempt + 1)
+                logger.warning("Analysis API attempt %d failed (%s), retrying in %ds...", attempt + 1, type(e).__name__, wait)
+                time.sleep(wait)
+            except openai.AuthenticationError:
+                raise RuntimeError(
+                    "GitHub token rejected by Models API. Run `gh auth login` or check GITHUB_TOKEN."
+                )
+
+        raise RuntimeError(f"Analysis API failed after {max_attempts} attempts: {last_error}")
 
     def _parse_response(self, response: str) -> AnalysisResult:
         """Parse JSON response from AI into AnalysisResult."""
-        # Strip markdown code fences if present.
+        import re
+
         text = response.strip()
-        if text.startswith("```"):
+        # Extract JSON from markdown code fences (handles ```json, ```JSON, extra whitespace).
+        fence_match = re.search(r'```(?:json)?\s*\n(.*?)```', text, re.DOTALL | re.IGNORECASE)
+        if fence_match:
+            text = fence_match.group(1).strip()
+        elif text.startswith("```"):
             text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-        if text.endswith("```"):
-            text = text[:-3]
-        text = text.strip()
+            if text.endswith("```"):
+                text = text[:-3]
+            text = text.strip()
 
         try:
             data = json.loads(text)

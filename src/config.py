@@ -56,7 +56,33 @@ def load_config(config_dir: str | Path | None = None) -> dict[str, Any]:
     # Apply environment variable overrides.
     _apply_env_overrides(config)
 
+    # Validate required fields.
+    _validate_config(config)
+
     return config
+
+
+def _validate_config(config: dict) -> None:
+    """Validate that essential config fields are populated."""
+    errors = []
+
+    project = config.get("project", {})
+    if not project.get("workspace_dir"):
+        errors.append("project.workspace_dir is required (path to your project workspace)")
+    if not project.get("module_path"):
+        errors.append("project.module_path is required (relative path to the module)")
+
+    az = config.get("azure_devops", {})
+    if not az.get("organization"):
+        errors.append("azure_devops.organization is required")
+    if not az.get("project"):
+        errors.append("azure_devops.project is required")
+
+    if errors:
+        import logging
+        logger = logging.getLogger("devops_ai_agent.config")
+        for e in errors:
+            logger.warning("Config: %s", e)
 
 
 def _apply_env_overrides(config: dict) -> None:

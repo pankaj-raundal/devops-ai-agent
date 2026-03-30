@@ -181,6 +181,54 @@
         }
         .modal .payload-preview.visible { display: block; }
 
+        /* Plan Approval Modal */
+        .plan-modal { max-width: 750px; }
+        .plan-select-bar {
+            display: flex; gap: 8px; margin: 8px 0;
+        }
+        .plan-select-bar button, button.small {
+            font-size: 11px; padding: 4px 10px; border-radius: 4px;
+            background: var(--surface); border: 1px solid var(--border); color: var(--text);
+            cursor: pointer;
+        }
+        .plan-select-bar button:hover, button.small:hover { background: var(--border); }
+        .plan-file-list {
+            max-height: 300px; overflow-y: auto; border: 1px solid var(--border);
+            border-radius: 8px; background: var(--bg);
+        }
+        .plan-file-item {
+            display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+            border-bottom: 1px solid var(--border); font-size: 13px;
+        }
+        .plan-file-item:last-child { border-bottom: none; }
+        .plan-file-item input[type=checkbox] {
+            width: 18px; height: 18px; accent-color: var(--green); cursor: pointer;
+        }
+        .plan-file-item .file-path { font-weight: 600; color: var(--accent); flex-shrink: 0; }
+        .plan-file-item .file-action {
+            font-size: 11px; padding: 2px 8px; border-radius: 4px; font-weight: 600;
+            text-transform: uppercase;
+        }
+        .plan-file-item .file-action.create { background: #3fb95022; color: var(--green); }
+        .plan-file-item .file-action.modify { background: #1f6feb22; color: var(--accent); }
+        .plan-file-item .file-action.delete { background: #f8514922; color: var(--red); }
+        .plan-file-item .file-desc { color: var(--muted); font-size: 12px; flex: 1; }
+        .plan-file-item .file-view-btn {
+            font-size: 11px; padding: 3px 8px; border-radius: 4px;
+            background: transparent; border: 1px solid var(--border); color: var(--text);
+            cursor: pointer; white-space: nowrap;
+        }
+        .plan-file-item .file-view-btn:hover { background: var(--border); }
+        .plan-file-preview {
+            margin-top: 12px; border: 1px solid var(--accent); border-radius: 8px;
+            padding: 12px; background: var(--bg);
+        }
+        .plan-code-block {
+            max-height: 300px; overflow: auto; font-size: 12px; font-family: monospace;
+            white-space: pre-wrap; padding: 8px; background: var(--surface); border-radius: 6px;
+            margin-top: 8px; line-height: 1.5;
+        }
+
         /* Story Queue panel */
         .queue-panel {
             background: var(--surface); border: 1px solid var(--border);
@@ -269,6 +317,7 @@
             <label><input type="checkbox" id="dryRun"> Dry run</label>
             <button onclick="fetchStory()">📥 Fetch Story</button>
             <button class="primary" onclick="runPipeline()" id="runBtn">▶ Run Pipeline</button>
+            <button onclick="retryPipeline()" id="retryBtn" style="display:none;" class="danger">🔄 Retry</button>
             <button onclick="fetchAllStories()">📋 Fetch All</button>
             <button class="primary" onclick="runAll()" id="runAllBtn">▶▶ Run All</button>
         </div>
@@ -330,6 +379,65 @@
         </div>
     </div>
 
+    <!-- Plan Approval Modal -->
+    <div class="modal-overlay" id="planModal">
+        <div class="modal plan-modal">
+            <h2>📋 Implementation Plan — Review Required</h2>
+            <div class="plan-summary">
+                <div class="data-item"><span class="data-label">Summary:</span> <span id="planSummary">—</span></div>
+                <div class="data-item"><span class="data-label">Approach:</span> <span id="planApproach">—</span></div>
+                <div class="data-item"><span class="data-label">Files:</span> <span id="planFileCount">—</span></div>
+            </div>
+
+            <div id="planRisks" style="display:none;">
+                <h3 style="margin-top:12px;font-size:14px;color:var(--orange);">⚠ Risks</h3>
+                <ul id="planRiskList" style="font-size:13px;padding-left:20px;"></ul>
+            </div>
+
+            <h3 style="margin-top:16px;font-size:14px;">File Changes — select which to approve:</h3>
+            <div class="plan-select-bar">
+                <button onclick="planSelectAll(true)" class="small">Select All</button>
+                <button onclick="planSelectAll(false)" class="small">Deselect All</button>
+            </div>
+            <div id="planFileList" class="plan-file-list"></div>
+
+            <div id="planTestSteps" style="display:none;margin-top:12px;">
+                <h3 style="font-size:14px;">🧪 Testing Steps</h3>
+                <ul id="planTestList" style="font-size:13px;padding-left:20px;"></ul>
+            </div>
+
+            <div id="planFilePreview" class="plan-file-preview" style="display:none;">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <h4 id="planPreviewTitle" style="font-size:13px;">—</h4>
+                    <button onclick="closePlanPreview()" class="small">✕ Close</button>
+                </div>
+                <pre id="planPreviewContent" class="plan-code-block"></pre>
+            </div>
+
+            <div class="actions">
+                <button class="danger" onclick="respondPlan(false)">✗ Reject Plan</button>
+                <button class="primary" onclick="respondPlan(true)">✓ Apply Approved Files</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Push Approval Modal -->
+    <div class="modal-overlay" id="pushModal">
+        <div class="modal" style="max-width:500px;">
+            <h2>🚀 Push Confirmation</h2>
+            <p style="margin:16px 0;font-size:15px;">
+                Branch <strong id="pushBranchName" style="color:var(--accent);">—</strong> is ready.
+            </p>
+            <p style="color:var(--text-muted);font-size:14px;margin-bottom:16px;">
+                The branch currently exists only locally. Push to origin?
+            </p>
+            <div class="actions">
+                <button onclick="respondPush(false)">Keep Local</button>
+                <button class="primary" onclick="respondPush(true)">🚀 Push to Origin</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Toast / Alert stack -->
     <div class="toast-container" id="toastContainer"></div>
 
@@ -345,6 +453,8 @@
             { id: 'commit',         icon: '💾', name: 'Commit' },
             { id: 'test',           icon: '🧪', name: 'Tests' },
             { id: 'review',         icon: '🔍', name: 'AI Review' },
+            { id: 'push',           icon: '🚀', name: 'Push' },
+            { id: 'pr',             icon: '🔗', name: 'Pull Request' },
             { id: 'complete',       icon: '✅', name: 'Complete' },
         ];
 
@@ -358,6 +468,27 @@
             renderProgressBar();
             renderStageCards();
             connectSSE();
+            restoreLastRun();
+        }
+
+        // Restore last run state on page refresh.
+        async function restoreLastRun() {
+            // Restore story ID from localStorage.
+            const savedId = localStorage.getItem('dai_last_story_id');
+            if (savedId) {
+                document.getElementById('storyId').value = savedId;
+            }
+
+            // Fetch event history to rebuild the last run's dashboard state.
+            try {
+                const resp = await fetch('/api/history');
+                const events = await resp.json();
+                if (events && events.length > 0) {
+                    events.forEach(event => handleEvent(event));
+                }
+            } catch (e) {
+                // Server may not be ready yet — SSE will catch up.
+            }
         }
 
         // --- SSE ---
@@ -428,6 +559,12 @@
                     return;
                 }
 
+                // Check if plan approval is needed.
+                if (status === 'plan_approval_required') {
+                    showPlanModal(details);
+                    // Still update the stage card to show "awaiting approval".
+                }
+
                 updateProgressBar();
                 updateStageCard(stage, status, title, details);
             }
@@ -435,6 +572,17 @@
             // Re-enable run button on complete or fail.
             if (stage === 'complete' || status === 'fail') {
                 document.getElementById('runBtn').disabled = false;
+                // Show retry button on failure.
+                if (status === 'fail') {
+                    document.getElementById('retryBtn').style.display = '';
+                } else {
+                    document.getElementById('retryBtn').style.display = 'none';
+                }
+            }
+
+            // Handle push approval request.
+            if (status === 'push_approval_required') {
+                showPushModal(details);
             }
         }
 
@@ -460,7 +608,10 @@
             }
 
             // Auto-fill story ID.
-            if (d.id) document.getElementById('storyId').value = d.id;
+            if (d.id) {
+                document.getElementById('storyId').value = d.id;
+                localStorage.setItem('dai_last_story_id', d.id);
+            }
         }
 
         function resetStoryCard(storyId) {
@@ -519,21 +670,43 @@
             const detailEl = document.getElementById('detail-' + stage);
             if (!card) return;
 
-            card.className = 'stage-card ' + status;
-            statusEl.className = 'stage-status ' + status;
-            statusEl.textContent = status.toUpperCase();
+            // Map plan statuses to visual classes.
+            let displayStatus = status;
+            let statusLabel = status.toUpperCase();
+            if (status === 'plan_ready' || status === 'plan_approval_required') {
+                displayStatus = 'running';  // Use running (amber) style.
+                statusLabel = '📋 REVIEW';
+            }
+            if (status === 'push_approval_required') {
+                displayStatus = 'running';
+                statusLabel = '🚀 CONFIRM';
+            }
+
+            card.className = 'stage-card ' + displayStatus;
+            statusEl.className = 'stage-status ' + displayStatus;
+            statusEl.textContent = statusLabel;
 
             let html = `<p>${escapeHtml(title)}</p>`;
             if (details && typeof details === 'object') {
-                const keys = Object.keys(details);
-                if (keys.length > 0) {
-                    html += '<pre>' + escapeHtml(JSON.stringify(details, null, 2)) + '</pre>';
+                // For plan events, show a cleaner summary instead of raw JSON.
+                if (details.plan && details.plan.file_changes) {
+                    const plan = details.plan;
+                    html += `<p style="margin-top:6px;"><strong>Summary:</strong> ${escapeHtml(plan.summary)}</p>`;
+                    html += `<p><strong>Files:</strong> ${plan.file_changes.length} change(s)</p>`;
+                    if (plan.risks && plan.risks.length > 0) {
+                        html += `<p style="color:var(--orange);">⚠ ${plan.risks.length} risk(s) identified</p>`;
+                    }
+                } else {
+                    const keys = Object.keys(details);
+                    if (keys.length > 0) {
+                        html += '<pre>' + escapeHtml(JSON.stringify(details, null, 2)) + '</pre>';
+                    }
                 }
             }
             detailEl.innerHTML = html;
 
-            // Auto-expand running stage.
-            if (status === 'running') {
+            // Auto-expand running or plan-review stage.
+            if (status === 'running' || status === 'plan_approval_required') {
                 card.classList.add('expanded');
             }
         }
@@ -577,6 +750,7 @@
             renderStageCards();
 
             document.getElementById('runBtn').disabled = true;
+            document.getElementById('retryBtn').style.display = 'none';
             showToast('Starting pipeline...');
 
             const resp = await fetch('/api/run', {
@@ -592,6 +766,33 @@
             if (!data.success) {
                 showToast('Failed to start pipeline: ' + (data.error || ''));
                 document.getElementById('runBtn').disabled = false;
+            }
+        }
+
+        function retryPipeline() {
+            // Retry with the same story ID — just calls runPipeline again.
+            document.getElementById('retryBtn').style.display = 'none';
+            runPipeline();
+        }
+
+        // --- Push approval modal ---
+        function showPushModal(details) {
+            const branch = details.branch_name || '(unknown)';
+            document.getElementById('pushBranchName').textContent = branch;
+            document.getElementById('pushModal').classList.add('visible');
+        }
+
+        async function respondPush(approved) {
+            document.getElementById('pushModal').classList.remove('visible');
+            await fetch('/api/push/respond', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ approved }),
+            });
+            if (approved) {
+                showToast('✓ Push approved — pushing to origin...', 'success');
+            } else {
+                showToast('Branch stays local — push declined', 'info');
             }
         }
 
@@ -636,6 +837,131 @@
                 body: JSON.stringify({ approved }),
             });
             showToast(approved ? '✓ Consent granted' : '✗ Consent denied');
+        }
+
+        // --- Plan approval modal ---
+        let currentPlanFiles = [];  // Track file data for the current plan.
+
+        function showPlanModal(planData) {
+            const plan = planData.plan || planData;
+            document.getElementById('planSummary').textContent = plan.summary || '—';
+            document.getElementById('planApproach').textContent = plan.approach || '—';
+            document.getElementById('planFileCount').textContent = (plan.total_files || plan.file_changes.length) + ' file(s)';
+
+            // Risks
+            const risksSection = document.getElementById('planRisks');
+            const riskList = document.getElementById('planRiskList');
+            riskList.innerHTML = '';
+            if (plan.risks && plan.risks.length > 0) {
+                risksSection.style.display = 'block';
+                plan.risks.forEach(r => {
+                    const li = document.createElement('li');
+                    li.textContent = r;
+                    riskList.appendChild(li);
+                });
+            } else {
+                risksSection.style.display = 'none';
+            }
+
+            // File changes
+            currentPlanFiles = plan.file_changes || [];
+            const fileList = document.getElementById('planFileList');
+            fileList.innerHTML = '';
+            currentPlanFiles.forEach((fc, idx) => {
+                const item = document.createElement('div');
+                item.className = 'plan-file-item';
+                item.innerHTML = `
+                    <input type="checkbox" id="plan-file-${idx}" checked>
+                    <span class="file-action ${fc.action}">${fc.action}</span>
+                    <span class="file-path">${escapeHtml(fc.path)}</span>
+                    <span class="file-desc">${escapeHtml(fc.description)}</span>
+                    <button class="file-view-btn" onclick="viewPlanFile(${idx})">👁 View</button>
+                `;
+                fileList.appendChild(item);
+            });
+
+            // Testing steps
+            const testSection = document.getElementById('planTestSteps');
+            const testList = document.getElementById('planTestList');
+            testList.innerHTML = '';
+            if (plan.testing_steps && plan.testing_steps.length > 0) {
+                testSection.style.display = 'block';
+                plan.testing_steps.forEach(step => {
+                    const li = document.createElement('li');
+                    li.textContent = step;
+                    testList.appendChild(li);
+                });
+            } else {
+                testSection.style.display = 'none';
+            }
+
+            // Hide preview
+            closePlanPreview();
+
+            document.getElementById('planModal').classList.add('visible');
+        }
+
+        function planSelectAll(checked) {
+            currentPlanFiles.forEach((_, idx) => {
+                const cb = document.getElementById('plan-file-' + idx);
+                if (cb) cb.checked = checked;
+            });
+        }
+
+        async function viewPlanFile(idx) {
+            const preview = document.getElementById('planFilePreview');
+            const title = document.getElementById('planPreviewTitle');
+            const content = document.getElementById('planPreviewContent');
+
+            // Try to fetch full content from the API (for large files).
+            try {
+                const resp = await fetch('/api/plan/file-content?index=' + idx);
+                const data = await resp.json();
+                if (data.content !== undefined) {
+                    title.textContent = `${data.action.toUpperCase()} — ${data.path}`;
+                    content.textContent = data.content;
+                    preview.style.display = 'block';
+                    return;
+                }
+            } catch (e) {}
+
+            // Fallback to preview from the plan data.
+            const fc = currentPlanFiles[idx];
+            if (fc) {
+                title.textContent = `${fc.action.toUpperCase()} — ${fc.path}`;
+                content.textContent = fc.content_preview || '(content not available in preview)';
+                preview.style.display = 'block';
+            }
+        }
+
+        function closePlanPreview() {
+            document.getElementById('planFilePreview').style.display = 'none';
+        }
+
+        async function respondPlan(approved) {
+            // Collect checked file indices.
+            const approvedFiles = [];
+            currentPlanFiles.forEach((_, idx) => {
+                const cb = document.getElementById('plan-file-' + idx);
+                if (cb && cb.checked) approvedFiles.push(idx);
+            });
+
+            document.getElementById('planModal').classList.remove('visible');
+
+            await fetch('/api/plan/respond', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    approved: approved,
+                    approved_files: approvedFiles,
+                }),
+            });
+
+            if (approved) {
+                showToast(`✓ Plan approved — ${approvedFiles.length}/${currentPlanFiles.length} file(s) selected`, 'success');
+            } else {
+                showToast('✗ Plan rejected', 'warning');
+            }
         }
 
         // --- Utilities ---

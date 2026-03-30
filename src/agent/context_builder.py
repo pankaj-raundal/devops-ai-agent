@@ -14,6 +14,17 @@ logger = logging.getLogger("devops_ai_agent.context")
 CONTEXT_FILENAME = ".current-story.md"
 RUN_HISTORY_FILENAME = ".pipeline-history.json"
 
+# Pipeline metadata is stored in the devops-ai-agent project directory,
+# NOT in the target workspace. This avoids polluting the target repo
+# with untracked files that block git checkouts.
+_DATA_DIR = Path(__file__).resolve().parent.parent.parent / ".dai"
+
+
+def _ensure_data_dir() -> Path:
+    """Ensure the .dai/ data directory exists."""
+    _DATA_DIR.mkdir(parents=True, exist_ok=True)
+    return _DATA_DIR
+
 
 def build_story_context(work_item: WorkItem, config: dict) -> str:
     """Build a markdown context document from a work item."""
@@ -27,7 +38,12 @@ def build_story_context(work_item: WorkItem, config: dict) -> str:
     module_path = config["project"].get("module_path", "")
     project_name = config["project"].get("name", "")
     local_env = config.get("local_env", {})
-    drush = local_env.get("drush_prefix", "drush")
+    cli_prefix = local_env.get("drush_prefix", local_env.get("cli_prefix", ""))
+
+    # Build framework-specific dev notes from profile.
+    from src.profiles import get_profile
+    profile = get_profile(config)
+    dev_notes = profile["dev_notes"].replace("{cli_prefix}", cli_prefix) if cli_prefix else profile["dev_notes"]
 
     context = f"""# Current Work Item
 
@@ -54,18 +70,16 @@ def build_story_context(work_item: WorkItem, config: dict) -> str:
 
 - Project: {project_name}
 - Module path: {module_path}
-- Use `{drush}` for Drush commands
-- Use `{drush} cr` to clear cache after changes
-- Follow Drupal coding standards (PSR-12 with Drupal conventions)
-- Ensure PHP 8.4 compatibility
+- Framework: {profile['framework_label']} ({profile['language']} {profile['language_version']})
+{dev_notes}
 """
     return context
 
 
 def save_story_context(work_item: WorkItem, config: dict) -> Path:
-    """Save the story context to the workspace."""
-    workspace = Path(config["project"]["workspace_dir"])
-    context_file = workspace / CONTEXT_FILENAME
+    """Save the story context to the data directory."""
+    data_dir = _ensure_data_dir()
+    context_file = data_dir / CONTEXT_FILENAME
     content = build_story_context(work_item, config)
     context_file.write_text(content)
     logger.info("Story context saved to %s", context_file)
@@ -73,9 +87,8 @@ def save_story_context(work_item: WorkItem, config: dict) -> Path:
 
 
 def load_story_context(config: dict) -> str | None:
-    """Load existing story context from workspace."""
-    workspace = Path(config["project"]["workspace_dir"])
-    context_file = workspace / CONTEXT_FILENAME
+    """Load existing story context from data directory."""
+    context_file = _DATA_DIR / CONTEXT_FILENAME
     if context_file.exists():
         return context_file.read_text()
     return None
@@ -84,8 +97,8 @@ def load_story_context(config: dict) -> str | None:
 # --- Run history (persists across pipeline runs) ---
 
 def _history_path(config: dict) -> Path:
-    workspace = Path(config["project"]["workspace_dir"])
-    return workspace / RUN_HISTORY_FILENAME
+    data_dir = _ensure_data_dir()
+    return data_dir / RUN_HISTORY_FILENAME
 
 
 def load_run_history(config: dict) -> list[dict]:

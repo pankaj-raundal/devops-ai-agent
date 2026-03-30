@@ -10,6 +10,7 @@ from pathlib import Path
 from .agent.analyzer import StoryAnalyzer
 from .agent.context_builder import build_story_context, build_history_context, save_story_context, save_run_record
 from .agent.implement import ImplementationAgent
+from .agent.plan import ImplementationPlan, apply_plan
 from .integrations.azure_devops import AzureDevOpsClient
 from .integrations.git_manager import GitManager
 from .integrations.zendesk import ZendeskClient
@@ -59,6 +60,24 @@ class Pipeline:
         self.state_on_no_code = az_cfg.get("state_on_no_code", "Evaluation")
         self.state_on_failure = az_cfg.get("state_on_failure", "")
         self._queue_mode = False  # Set True by run_queue() to preserve event history.
+        self._plan_approval_callback: callable | None = None  # Set by dashboard for async approval.
+        self._push_approval_callback: callable | None = None  # Set by dashboard for push confirmation.
+
+    def set_plan_approval_callback(self, callback: callable) -> None:
+        """Set a callback for plan approval (used by dashboard).
+
+        The callback receives an ImplementationPlan and should return it with
+        file_changes[].approved set for each accepted file. It should also set
+        plan.approved = True if the overall plan is accepted.
+        """
+        self._plan_approval_callback = callback
+
+    def set_push_approval_callback(self, callback: callable) -> None:
+        """Set a callback for push confirmation (used by dashboard).
+
+        The callback receives branch_name and returns True if user approves push.
+        """
+        self._push_approval_callback = callback
 
     def run(self, work_item_id: int | None = None, skip_tests: bool = False, dry_run: bool = False) -> list[PipelineResult]:
         """Execute the full pipeline. If work_item_id is None, fetch latest."""
@@ -233,6 +252,52 @@ class Pipeline:
                 full_context = story_context + "\n\n" + history_ctx
                 logger.info("Including history from %d previous run(s).", history_ctx.count("### Run"))
             impl_result = self.implementer.implement(full_context)
+
+            # --- Plan-review flow: if a plan is returned, get approval before applying ---
+            plan: ImplementationPlan | None = impl_result.get("plan")
+            if plan and impl_result["success"]:
+                logger.info("Plan generated with %d file change(s). Awaiting approval...", len(plan.file_changes))
+                event_bus.emit(PipelineEvent("implement", "plan_ready",
+                    f"Plan ready: {len(plan.file_changes)} file(s) — awaiting approval", {
+                        "method": impl_result["method"],
+                        "plan": plan.to_dict(),
+                    }))
+
+                # Get approval — via dashboard callback or CLI prompt.
+                plan = self._get_plan_approval(plan)
+
+                if not plan.approved:
+                    logger.info("Plan rejected by user.")
+                    event_bus.emit(PipelineEvent("implement", "fail", "Plan rejected by user"))
+                    results.append(PipelineResult(Stage.IMPLEMENT, False, error="Plan rejected"))
+                    self._emit_alert("warning", f"Plan rejected for #{work_item.id}")
+                    return results
+
+                # Apply approved file changes.
+                event_bus.emit(PipelineEvent("implement", "running", "Applying approved changes..."))
+                approved_count = sum(1 for fc in plan.file_changes if fc.approved)
+                logger.info("Applying %d approved file change(s)...", approved_count)
+
+                apply_result = apply_plan(plan, self.workspace, self.implementer.module_path)
+                logger.info("Applied %d file(s), skipped %d.",
+                            apply_result["total_applied"], apply_result["total_skipped"])
+
+                if apply_result["total_applied"] == 0:
+                    event_bus.emit(PipelineEvent("implement", "fail", "No file changes were approved/applied"))
+                    results.append(PipelineResult(Stage.IMPLEMENT, False, error="No changes applied"))
+                    return results
+
+                impl_result["output"] = (
+                    f"Plan applied: {apply_result['total_applied']} file(s) written, "
+                    f"{apply_result['total_skipped']} skipped.\n\n{plan.to_markdown()}"
+                )
+                event_bus.emit(PipelineEvent("implement", "pass",
+                    f"Plan applied: {apply_result['total_applied']} file(s)", {
+                        "method": impl_result["method"],
+                        "applied": apply_result["applied"],
+                        "skipped": apply_result["skipped"],
+                    }))
+
         results.append(PipelineResult(Stage.IMPLEMENT, impl_result["success"], details=impl_result))
 
         if not impl_result["success"]:
@@ -273,7 +338,7 @@ class Pipeline:
         if not skip_tests:
             event_bus.emit(PipelineEvent("test", "running", "Running tests..."))
             logger.info("=== Stage 5: Test ===")
-            test_summary = self.test_runner.run_all()
+            test_summary = self.test_runner.run_all(changed_files=changed if changed else None)
             results.append(PipelineResult(Stage.TEST, test_summary.all_passed, details={
                 "summary": test_summary.summary_text()
             }))
@@ -319,14 +384,60 @@ class Pipeline:
         # Transition state → Testing (successful pipeline).
         self._transition_state(work_item.id, self.state_on_success)
 
+        # --- Stage 7: Push confirmation ---
+        pr_url = ""
+        event_bus.emit(PipelineEvent("push", "running", f"Branch {branch_name} ready — awaiting push confirmation..."))
+        logger.info("=== Stage 7: Push Confirmation ===")
+
+        push_approved = self._get_push_approval(branch_name)
+
+        if push_approved:
+            try:
+                self.git.push_branch(branch_name)
+                event_bus.emit(PipelineEvent("push", "pass", f"Pushed {branch_name} to origin", {
+                    "branch": branch_name,
+                }))
+                logger.info("Pushed branch %s to origin.", branch_name)
+            except RuntimeError as e:
+                event_bus.emit(PipelineEvent("push", "fail", f"Push failed: {e}"))
+                logger.error("Failed to push branch: %s", e)
+
+            # --- Stage 8: Pull Request (optional, only after push) ---
+            if self.git.auto_pr:
+                event_bus.emit(PipelineEvent("pr", "running", "Creating Pull Request..."))
+                logger.info("=== Stage 8: Pull Request ===")
+                pr_result = self.git.create_pull_request(
+                    work_item_id=work_item.id,
+                    title=work_item.title,
+                    description=work_item.description or "",
+                    branch_name=branch_name,
+                )
+                if pr_result["success"]:
+                    pr_url = pr_result["url"]
+                    event_bus.emit(PipelineEvent("pr", "pass", f"PR created: {pr_url}", {
+                        "url": pr_url,
+                    }))
+                    logger.info("PR created: %s", pr_url)
+                else:
+                    event_bus.emit(PipelineEvent("pr", "fail", f"PR creation failed: {pr_result['error']}"))
+                    logger.warning("PR creation failed: %s", pr_result["error"])
+        else:
+            event_bus.emit(PipelineEvent("push", "pass", f"Push declined — branch {branch_name} stays local", {
+                "branch": branch_name,
+                "pushed": False,
+            }))
+            logger.info("Push declined by user. Branch %s remains local.", branch_name)
+
         # --- Complete ---
         results.append(PipelineResult(Stage.COMPLETE, True, details={
             "branch": branch_name,
             "work_item_id": work_item.id,
+            "pr_url": pr_url,
         }))
         event_bus.emit(PipelineEvent("complete", "pass", f"Pipeline complete for #{work_item.id}", {
             "branch": branch_name,
             "work_item_id": work_item.id,
+            "pr_url": pr_url,
         }))
         self._emit_alert("success", f"Pipeline complete for #{work_item.id} — branch: {branch_name}")
         logger.info("=== Pipeline complete for #%s ===", work_item.id)
@@ -343,6 +454,109 @@ class Pipeline:
         return results
 
     # --- Helper methods ---
+
+    def _get_plan_approval(self, plan: ImplementationPlan) -> ImplementationPlan:
+        """Get approval for an implementation plan.
+
+        If a dashboard callback is set, use it (async approval via UI).
+        Otherwise, fall back to CLI interactive approval.
+        """
+        if self._plan_approval_callback:
+            return self._plan_approval_callback(plan)
+        return self._cli_plan_approval(plan)
+
+    def _cli_plan_approval(self, plan: ImplementationPlan) -> ImplementationPlan:
+        """Interactive CLI approval of an implementation plan."""
+        from rich.console import Console
+        from rich.panel import Panel
+
+        console = Console()
+        console.print()
+        console.rule("[bold yellow]📋 Implementation Plan — Review Required[/]")
+        console.print()
+        console.print(f"  [bold]Summary:[/]  {plan.summary}")
+        console.print(f"  [bold]Approach:[/] {plan.approach}")
+        console.print(f"  [bold]Files:[/]    {len(plan.file_changes)} change(s)")
+        if plan.risks:
+            console.print(f"  [bold red]Risks:[/]    {', '.join(plan.risks)}")
+        console.print()
+
+        for i, fc in enumerate(plan.file_changes, 1):
+            console.print(Panel(
+                f"[bold]{fc.action.upper()}[/] — {fc.description}\n"
+                f"Content: {len(fc.content)} chars",
+                title=f"[cyan]{i}. {fc.path}[/]",
+                border_style="cyan",
+            ))
+            try:
+                answer = console.input(
+                    f"  Approve this change? [Y]es / [N]o / [V]iew content: "
+                ).strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                console.print("\n[red]Aborted.[/]")
+                return plan
+
+            if answer in ("v", "view"):
+                console.print(Panel(
+                    fc.content[:5000] + ("\n... (truncated)" if len(fc.content) > 5000 else ""),
+                    title="File Content",
+                    border_style="dim",
+                ))
+                try:
+                    answer = console.input("  Approve after review? [Y]es / [N]o: ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    console.print("\n[red]Aborted.[/]")
+                    return plan
+
+            fc.approved = answer in ("y", "yes", "")
+            status = "[green]✓ Approved[/]" if fc.approved else "[red]✗ Rejected[/]"
+            console.print(f"  {status}")
+            console.print()
+
+        approved_count = sum(1 for fc in plan.file_changes if fc.approved)
+        console.print(f"[bold]Approved {approved_count}/{len(plan.file_changes)} file changes.[/]")
+
+        if approved_count > 0:
+            try:
+                final = console.input(
+                    "Apply approved changes? [Y]es / [N]o: "
+                ).strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                console.print("\n[red]Aborted.[/]")
+                return plan
+            plan.approved = final in ("y", "yes", "")
+        else:
+            plan.approved = False
+
+        return plan
+
+    def _get_push_approval(self, branch_name: str) -> bool:
+        """Get user confirmation before pushing branch to origin.
+
+        If a dashboard callback is set, use it (async approval via UI).
+        Otherwise, fall back to CLI interactive prompt.
+        """
+        if self._push_approval_callback:
+            return self._push_approval_callback(branch_name)
+        return self._cli_push_approval(branch_name)
+
+    def _cli_push_approval(self, branch_name: str) -> bool:
+        """Interactive CLI prompt for push confirmation."""
+        from rich.console import Console
+
+        console = Console()
+        console.print()
+        console.rule("[bold yellow]🚀 Push Confirmation[/]")
+        console.print(f"\n  Branch [cyan]{branch_name}[/] is ready.")
+        console.print("  Push to origin? The branch currently exists only locally.\n")
+
+        try:
+            answer = console.input("  Push to origin? [Y]es / [N]o: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n[red]Aborted — branch stays local.[/]")
+            return False
+
+        return answer in ("y", "yes", "")
 
     def _write_back_comment(self, work_item_id: int, zendesk_ticket_id: int | None, comment_md: str) -> None:
         """Post a comment to Azure DevOps (and Zendesk if applicable)."""
@@ -451,6 +665,12 @@ class Pipeline:
                                          }))
 
             logger.info("=== Queue [%d/%d]: Story #%s ===", position, total, story.id)
+            # Reset workspace to clean master before each story to avoid
+            # leftover changes from the previous story bleeding across.
+            try:
+                self.git.reset_workspace()
+            except Exception as e:
+                logger.error("Failed to reset workspace before story #%s: %s", story.id, e)
             results = self.run(work_item_id=story.id, skip_tests=skip_tests, dry_run=dry_run)
             all_results[story.id] = results
 

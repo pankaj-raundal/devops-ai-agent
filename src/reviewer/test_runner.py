@@ -51,28 +51,66 @@ class TestRunner:
         self.workspace_dir = Path(project.get("workspace_dir", "."))
         self.module_path = project.get("module_path", "")
         local_env = config.get("local_env", {})
-        self.container_cmd = local_env.get("container_command", "ddev")
-        self.checks = config.get("ai_agent", {}).get("checks", [
-            "phpunit", "phpcs", "phpstan", "drush_cr"
-        ])
+        self.container_cmd = local_env.get("container_command", local_env.get("type", "ddev"))
 
-    def run_all(self) -> TestSummary:
-        """Run all configured checks and return summary."""
+        # test_scope: "all" = full module, "changed" = only changed files
+        git_config = config.get("git", {})
+        self.test_scope = git_config.get("test_scope", "changed")
+
+        # Load checks from config, or fall back to framework profile defaults.
+        configured_checks = config.get("ai_agent", {}).get("checks")
+        if configured_checks:
+            self.checks = configured_checks
+        else:
+            from src.profiles import get_profile
+            profile = get_profile(config)
+            self.checks = profile.get("checks", [])
+
+    def run_all(self, changed_files: list[str] | None = None) -> TestSummary:
+        """Run all configured checks and return summary.
+
+        Args:
+            changed_files: List of changed file paths (relative to workspace).
+                Used when test_scope is 'changed' to limit lint/analysis scope.
+        """
         summary = TestSummary()
+
+        # Filter to relevant files for scoped checks.
+        scoped_files = self._get_scoped_files(changed_files)
 
         for check in self.checks:
             handler = getattr(self, f"_run_{check}", None)
             if handler:
-                logger.info("Running check: %s", check)
-                result = handler()
+                logger.info("Running check: %s (scope: %s)", check, self.test_scope)
+                result = handler(scoped_files)
                 summary.results.append(result)
             else:
                 logger.warning("Unknown check: %s — skipping", check)
 
         return summary
 
-    def _run_phpunit(self) -> TestResult:
-        """Run PHPUnit tests."""
+    def _get_scoped_files(self, changed_files: list[str] | None) -> list[str]:
+        """Return file paths to check based on test_scope config."""
+        if self.test_scope != "changed" or not changed_files:
+            return []
+
+        # Filter to files within the module path that are lintable.
+        lint_extensions = {".php", ".module", ".inc", ".install", ".test", ".profile", ".theme"}
+        scoped = []
+        for f in changed_files:
+            if self.module_path and not f.startswith(self.module_path):
+                continue
+            if Path(f).suffix in lint_extensions:
+                scoped.append(f)
+
+        if scoped:
+            logger.info("Test scope 'changed': %d file(s) targeted", len(scoped))
+        else:
+            logger.info("Test scope 'changed': no lintable files in changeset")
+        return scoped
+
+    def _run_phpunit(self, scoped_files: list[str]) -> TestResult:
+        """Run PHPUnit tests (always runs full test suite — tests aren't per-file)."""
         test_dir = f"{self.module_path}/tests/"
         cmd = [
             self.container_cmd, "exec",
@@ -80,27 +118,33 @@ class TestRunner:
         ]
         return self._exec("phpunit", cmd)
 
-    def _run_phpcs(self) -> TestResult:
-        """Run PHP CodeSniffer."""
-        cmd = [
+    def _run_phpcs(self, scoped_files: list[str]) -> TestResult:
+        """Run PHP CodeSniffer — scoped to changed files when configured."""
+        base_cmd = [
             self.container_cmd, "exec",
             "phpcs", "--standard=Drupal,DrupalPractice",
             "--extensions=php,module,inc,install,test,profile,theme",
-            self.module_path,
         ]
+        if scoped_files:
+            cmd = base_cmd + scoped_files
+        else:
+            cmd = base_cmd + [self.module_path]
         return self._exec("phpcs", cmd)
 
-    def _run_phpstan(self) -> TestResult:
-        """Run PHPStan static analysis."""
-        cmd = [
+    def _run_phpstan(self, scoped_files: list[str]) -> TestResult:
+        """Run PHPStan static analysis — scoped to changed files when configured."""
+        base_cmd = [
             self.container_cmd, "exec",
-            "phpstan", "analyse", self.module_path,
-            "--level=2", "--no-progress",
+            "phpstan", "analyse",
         ]
+        if scoped_files:
+            cmd = base_cmd + scoped_files + ["--level=2", "--no-progress"]
+        else:
+            cmd = base_cmd + [self.module_path, "--level=2", "--no-progress"]
         return self._exec("phpstan", cmd)
 
-    def _run_drush_cr(self) -> TestResult:
-        """Run drush cache rebuild to verify no fatal errors."""
+    def _run_drush_cr(self, scoped_files: list[str]) -> TestResult:
+        """Run drush cache rebuild to verify no fatal errors (always module-wide)."""
         cmd = [self.container_cmd, "drush", "cr"]
         return self._exec("drush_cr", cmd)
 

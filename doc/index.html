@@ -1,0 +1,771 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DevOps AI Agent — Architecture &amp; Review Documentation</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface-2: #1c2129;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-muted: #8b949e;
+    --accent: #58a6ff;
+    --accent-2: #388bfd;
+    --green: #3fb950;
+    --red: #f85149;
+    --orange: #d29922;
+    --purple: #bc8cff;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    font-size: 15px;
+  }
+
+  /* Layout */
+  .layout { display: flex; min-height: 100vh; }
+  .sidebar {
+    width: 280px;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    padding: 20px 0;
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    overflow-y: auto;
+    z-index: 10;
+  }
+  .sidebar h2 {
+    font-size: 14px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    padding: 0 20px;
+    margin-bottom: 10px;
+  }
+  .sidebar .logo {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--accent);
+    padding: 0 20px 20px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 15px;
+  }
+  .sidebar a {
+    display: block;
+    padding: 6px 20px;
+    color: var(--text-muted);
+    text-decoration: none;
+    font-size: 13px;
+    transition: all 0.15s;
+  }
+  .sidebar a:hover, .sidebar a.active {
+    color: var(--accent);
+    background: rgba(88, 166, 255, 0.08);
+  }
+  .sidebar a.section-head {
+    color: var(--text);
+    font-weight: 600;
+    font-size: 14px;
+    margin-top: 15px;
+  }
+  .main {
+    margin-left: 280px;
+    flex: 1;
+    max-width: 960px;
+    padding: 40px 60px 80px;
+  }
+
+  /* Tab navigation */
+  .tab-nav {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 40px;
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 5;
+    padding-top: 10px;
+  }
+  .tab-btn {
+    padding: 12px 24px;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+  }
+  .tab-btn:hover { color: var(--text); }
+  .tab-btn.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+
+  /* Typography */
+  h1 {
+    font-size: 32px;
+    font-weight: 700;
+    margin-bottom: 10px;
+    color: var(--text);
+  }
+  h2 {
+    font-size: 24px;
+    font-weight: 600;
+    margin: 50px 0 15px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+  }
+  h3 {
+    font-size: 18px;
+    font-weight: 600;
+    margin: 30px 0 10px;
+    color: var(--text);
+  }
+  h4 {
+    font-size: 15px;
+    font-weight: 600;
+    margin: 20px 0 8px;
+    color: var(--text);
+  }
+  p { margin: 10px 0; color: var(--text); }
+  .subtitle {
+    color: var(--text-muted);
+    font-size: 14px;
+    margin-bottom: 30px;
+    font-style: italic;
+  }
+  blockquote {
+    border-left: 3px solid var(--accent);
+    padding: 10px 20px;
+    margin: 15px 0;
+    background: var(--surface);
+    border-radius: 0 6px 6px 0;
+    color: var(--text-muted);
+  }
+  blockquote strong { color: var(--text); }
+  strong { color: var(--text); }
+  em { color: var(--text-muted); }
+  ul, ol {
+    margin: 10px 0 10px 25px;
+    color: var(--text);
+  }
+  li { margin: 5px 0; }
+  hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 40px 0;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* Tables */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 15px 0;
+    font-size: 13px;
+  }
+  th {
+    background: var(--surface-2);
+    padding: 10px 14px;
+    text-align: left;
+    font-weight: 600;
+    color: var(--text);
+    border: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  td {
+    padding: 8px 14px;
+    border: 1px solid var(--border);
+    vertical-align: top;
+  }
+  tr:hover td { background: rgba(88, 166, 255, 0.03); }
+
+  /* Code blocks */
+  pre {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px;
+    overflow-x: auto;
+    margin: 15px 0;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  code {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 13px;
+  }
+  p code, li code, td code {
+    background: var(--surface-2);
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    font-size: 12px;
+  }
+
+  /* Badges */
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .badge-green { background: rgba(63,185,80,0.15); color: var(--green); }
+  .badge-red { background: rgba(248,81,73,0.15); color: var(--red); }
+  .badge-orange { background: rgba(210,153,34,0.15); color: var(--orange); }
+  .badge-blue { background: rgba(88,166,255,0.15); color: var(--accent); }
+  .badge-purple { background: rgba(188,140,255,0.15); color: var(--purple); }
+
+  /* Cards */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    margin: 15px 0;
+  }
+  .card-title {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 10px;
+    color: var(--accent);
+  }
+
+  /* Callout */
+  .callout {
+    border-radius: 6px;
+    padding: 16px 20px;
+    margin: 20px 0;
+    border-left: 4px solid;
+  }
+  .callout-info { background: rgba(88,166,255,0.08); border-color: var(--accent); }
+  .callout-warn { background: rgba(210,153,34,0.08); border-color: var(--orange); }
+  .callout-success { background: rgba(63,185,80,0.08); border-color: var(--green); }
+  .callout-danger { background: rgba(248,81,73,0.08); border-color: var(--red); }
+  .callout strong { display: block; margin-bottom: 5px; }
+
+  /* Pitch box */
+  .pitch {
+    background: linear-gradient(135deg, rgba(88,166,255,0.1), rgba(188,140,255,0.1));
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    padding: 25px 30px;
+    margin: 30px 0;
+    text-align: center;
+    font-size: 18px;
+    font-style: italic;
+    color: var(--text);
+  }
+
+  /* Tier comparison */
+  .tier-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 15px;
+    margin: 20px 0;
+  }
+  .tier {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    text-align: center;
+  }
+  .tier.recommended { border-color: var(--green); box-shadow: 0 0 12px rgba(63,185,80,0.15); }
+  .tier.future { border-color: var(--purple); }
+  .tier h4 { margin-top: 0; font-size: 16px; }
+  .tier .accuracy { font-size: 28px; font-weight: 700; margin: 10px 0; }
+  .tier.recommended .accuracy { color: var(--green); }
+  .tier.future .accuracy { color: var(--purple); }
+
+  /* Phase timeline */
+  .phase {
+    border-left: 3px solid var(--border);
+    padding-left: 25px;
+    margin: 25px 0;
+    position: relative;
+  }
+  .phase::before {
+    content: '';
+    width: 13px;
+    height: 13px;
+    border-radius: 50%;
+    background: var(--accent);
+    position: absolute;
+    left: -8px;
+    top: 5px;
+  }
+  .phase.eliminated::before { background: var(--red); }
+  .phase.simplified::before { background: var(--orange); }
+  .phase.unchanged::before { background: var(--text-muted); }
+  .phase.accelerated::before { background: var(--green); }
+
+  /* Responsive */
+  @media (max-width: 1100px) {
+    .sidebar { display: none; }
+    .main { margin-left: 0; padding: 20px 25px 60px; }
+    .tier-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="layout">
+  <nav class="sidebar">
+    <div class="logo">DevOps AI Agent</div>
+    <h2>Documentation</h2>
+    <a href="#" class="section-head" onclick="switchTab('critic')">Critical Review</a>
+    <a href="#c1" onclick="switchTab('critic')">1. Setup Tax</a>
+    <a href="#c2" onclick="switchTab('critic')">2. AI-Ready Stories</a>
+    <a href="#c3" onclick="switchTab('critic')">3. Blind API Fallback</a>
+    <a href="#c4" onclick="switchTab('critic')">4. Drupal Only</a>
+    <a href="#c5" onclick="switchTab('critic')">5. No Feedback Loop</a>
+    <a href="#c6" onclick="switchTab('critic')">6. GitHub-Only PRs</a>
+    <a href="#c7" onclick="switchTab('critic')">7. Dashboard = Viewer</a>
+    <a href="#c8" onclick="switchTab('critic')">8. Single-User</a>
+    <a href="#c9" onclick="switchTab('critic')">9. Constant Babysitting</a>
+    <a href="#c10" onclick="switchTab('critic')">10. Value Proposition</a>
+    <a href="#" class="section-head" onclick="switchTab('response')">Architectural Response</a>
+    <a href="#positioning" onclick="switchTab('response')">Strategic Positioning</a>
+    <a href="#roadmap" onclick="switchTab('response')">Engine-First Roadmap</a>
+    <a href="#metrics" onclick="switchTab('response')">Success Metrics</a>
+    <a href="#" class="section-head" onclick="switchTab('impact')">Claude Code Impact</a>
+    <a href="#fundamental-shift" onclick="switchTab('impact')">Fundamental Shift</a>
+    <a href="#phase-impact" onclick="switchTab('impact')">Phase-by-Phase Impact</a>
+    <a href="#three-tiers" onclick="switchTab('impact')">Three Tiers</a>
+    <a href="#opus-vs-code" onclick="switchTab('impact')">Opus 4.6 vs Code API</a>
+  </nav>
+
+  <main class="main">
+    <div class="tab-nav">
+      <button class="tab-btn active" onclick="switchTab('critic')">Critical Review</button>
+      <button class="tab-btn" onclick="switchTab('response')">Architectural Response</button>
+      <button class="tab-btn" onclick="switchTab('impact')">Claude Code Impact</button>
+    </div>
+
+    <!-- ==================== TAB 1: CRITICAL REVIEW ==================== -->
+    <div id="tab-critic" class="tab-content active">
+      <h1>Critical Review</h1>
+      <p class="subtitle">DevOps AI Agent vs GitHub Copilot in VS Code — Post-demo review from a skeptical stakeholder</p>
+
+      <div class="callout callout-danger">
+        <strong>"Why would I use this over Copilot in VS Code?"</strong>
+        The central question every feature and fix must answer.
+      </div>
+
+      <h2 id="c1">1. Setup Tax Is Way Too High</h2>
+      <p>Before anyone can even <em>try</em> this tool, they need:</p>
+      <ul>
+        <li>Azure CLI installed + authenticated (<code>az login</code>)</li>
+        <li>Python 3.10+ with venv</li>
+        <li>A YAML config file filled out with 15+ fields</li>
+        <li>An API key for Anthropic/OpenAI <em>or</em> GitHub CLI auth</li>
+        <li>Stories tagged with <code>auto</code> in Azure DevOps</li>
+        <li>DDEV running for tests</li>
+        <li><code>gh</code> CLI for PR creation</li>
+      </ul>
+      <div class="callout callout-info">
+        <strong>With Copilot?</strong> Open VS Code, it's already there. Read the story, type what you want, done. Zero config.
+      </div>
+
+      <h2 id="c2">2. Stories Must Be "AI-Ready"</h2>
+      <p>The pipeline starts from an Azure DevOps story, but:</p>
+      <ul>
+        <li>Stories must be <strong>assigned to a specific user</strong> and tagged <code>auto</code></li>
+        <li>They must have good enough descriptions for AI to parse</li>
+        <li>Most real-world stories are vague: <em>"Fix the translation issue"</em></li>
+      </ul>
+      <p><strong>You're adding a prerequisite to your prerequisite.</strong> Train PMs to write AI-parseable stories before the tool even works.</p>
+
+      <h2 id="c3">3. The AI Can't See the Codebase</h2>
+      <p>Without Claude Code CLI, the tool falls back to API mode where the AI <strong>has no filesystem access</strong> and uses a naive <strong>append strategy</strong> — literally appending code to the end of files:</p>
+      <ul>
+        <li>Methods outside class definitions</li>
+        <li>Duplicate <code>use</code>/<code>import</code> statements</li>
+        <li>Syntax errors</li>
+      </ul>
+      <div class="callout callout-warn">
+        <strong>Copilot in VS Code sees open files, cursor position, project structure.</strong> The API fallback is <em>worse</em> than using Copilot inline.
+      </div>
+
+      <h2 id="c4">4. Only Drupal Actually Works</h2>
+      <p>6 framework profiles advertised, but <strong>only Drupal has test runner implementations</strong>:</p>
+      <table>
+        <tr><th>Framework</th><th>Handlers Exist?</th><th>Status</th></tr>
+        <tr><td>Drupal</td><td>phpunit, phpcs, phpstan, drush_cr</td><td><span class="badge badge-green">Working</span></td></tr>
+        <tr><td>Python</td><td>pytest, ruff, mypy</td><td><span class="badge badge-red">Missing</span></td></tr>
+        <tr><td>React</td><td>jest, eslint, tsc</td><td><span class="badge badge-red">Missing</span></td></tr>
+        <tr><td>Java</td><td>mvn_test, checkstyle, spotbugs</td><td><span class="badge badge-red">Missing</span></td></tr>
+        <tr><td>.NET</td><td>dotnet_test, dotnet_format</td><td><span class="badge badge-red">Missing</span></td></tr>
+        <tr><td>Angular</td><td>ng_test, ng_lint, tsc</td><td><span class="badge badge-red">Missing</span></td></tr>
+      </table>
+      <p>Scoped file filter hardcodes <code>.php</code>, <code>.module</code>, <code>.inc</code> — useless for non-PHP.</p>
+
+      <h2 id="c5">5. No Feedback Loop</h2>
+      <p>If tests fail after implementation, the pipeline just <strong>stops</strong>. No retry, no self-correction, no auto-fix.</p>
+      <div class="callout callout-info">
+        <strong>Copilot Agent mode and Claude Code iteratively fix their own errors.</strong> This tool gives up on first failure — the most valuable part of AI coding is missing.
+      </div>
+
+      <h2 id="c6">6. PR Creation Only Works with GitHub</h2>
+      <p><code>gh pr create</code> only works for GitHub repos. Primary integration is <strong>Azure DevOps</strong> — which uses Azure Repos. Fundamental disconnect.</p>
+
+      <h2 id="c7">7. Dashboard Is a Viewer, Not a Workspace</h2>
+      <ul>
+        <li>Can't <strong>edit</strong> the AI's proposed code</li>
+        <li>Can't see <strong>diffs</strong> inline</li>
+        <li>Can't provide <strong>feedback</strong> to the AI</li>
+        <li>No syntax highlighting in reviews</li>
+        <li>Rejected plans have no way to explain <em>why</em></li>
+      </ul>
+
+      <h2 id="c8">8. Single-User, No Team Value</h2>
+      <ul>
+        <li>One pipeline run at a time (global mutable state)</li>
+        <li>No user auth on the dashboard</li>
+        <li>No team visibility</li>
+        <li>Audit trail = 10-entry JSON file</li>
+        <li>No CI/CD integration</li>
+      </ul>
+      <p>A <strong>personal productivity tool</strong> with the complexity of an <strong>enterprise platform</strong>.</p>
+
+      <h2 id="c9">9. "Automation" Requires Constant Babysitting</h2>
+      <p>Three mandatory approval gates:</p>
+      <ol>
+        <li><strong>Data consent</strong> — every time</li>
+        <li><strong>Plan approval</strong> — checkbox by checkbox</li>
+        <li><strong>Push confirmation</strong> — approve the push</li>
+      </ol>
+      <p>That's not automation. That's watching a progress bar and clicking approve three times.</p>
+
+      <h2 id="c10">10. What Problem Does This Actually Solve?</h2>
+      <table>
+        <tr><th>Task</th><th>With Copilot</th><th>With DevOps AI Agent</th></tr>
+        <tr><td>Read story</td><td>Click ADO link</td><td>Automatic (needs tag + config)</td></tr>
+        <tr><td>Create branch</td><td><code>git checkout -b</code></td><td>Automatic</td></tr>
+        <tr><td>Implement</td><td>Ask Copilot, iterate</td><td>Wait for pipeline, approve plan</td></tr>
+        <tr><td>Run tests</td><td>Terminal command</td><td>Automatic (Drupal only)</td></tr>
+        <tr><td>Code review</td><td>Open PR, Copilot reviews</td><td>Automatic AI review</td></tr>
+        <tr><td>Push + PR</td><td><code>git push && gh pr create</code></td><td>Click approve twice</td></tr>
+      </table>
+
+      <div class="callout callout-danger">
+        <strong>Bottom Line:</strong> This tool automates the <strong>easy parts</strong> (branching, state transitions) while making the <strong>hard parts</strong> (implementation, testing, review) more cumbersome than tools developers already have.
+      </div>
+    </div>
+
+    <!-- ==================== TAB 2: ARCHITECTURAL RESPONSE ==================== -->
+    <div id="tab-response" class="tab-content">
+      <h1>Architectural Response</h1>
+      <p class="subtitle">Senior Architect — Actionable technical plan to address every issue raised</p>
+
+      <div class="callout callout-success">
+        <strong>Philosophy:</strong> Don't compete with Copilot-in-editor. Own the space Copilot can't touch: <strong>unattended batch processing, end-to-end traceability, and DevOps lifecycle automation.</strong>
+      </div>
+
+      <h2 id="positioning">Strategic Positioning</h2>
+      <p><strong>We should NOT be a coding assistant. We should be a coding pipeline.</strong></p>
+      <table>
+        <tr><th>Copilot in VS Code</th><th>DevOps AI Agent</th></tr>
+        <tr><td>Developer is present, typing</td><td>Developer is asleep or in meetings</td></tr>
+        <tr><td>One file at a time</td><td>Full story → branch → implement → test → review → PR</td></tr>
+        <tr><td>No project management integration</td><td>ADO story lifecycle, Zendesk ticketing</td></tr>
+        <tr><td>No audit trail</td><td>Full traceability: request → AI action → tests → approval</td></tr>
+        <tr><td>Manual branch/PR/state management</td><td>Fully automated DevOps lifecycle</td></tr>
+      </table>
+      <p><strong>Target persona:</strong> Not "developer coding at desk" but "team lead who has 15 low-complexity stories and wants 10 done by morning."</p>
+
+      <hr>
+
+      <h2>Approach for Each Issue</h2>
+
+      <h3>#1 → <code>dai init</code> + <code>dai doctor</code></h3>
+      <p>Interactive setup wizard that auto-detects workspace, org, auth. Environment health check with actionable fixes. <span class="badge badge-blue">~250 lines</span></p>
+
+      <h3>#2 → Story Quality Scoring</h3>
+      <p>AI analysis produces a quality score (1-10). Score &lt;4 → pauses pipeline, posts coaching comment to ADO. Turns the problem into a feature. <span class="badge badge-blue">~80 lines</span></p>
+
+      <h3>#3 → Smart Context Injection + Diff Merge</h3>
+      <p>Two-pass AI call: file selection → read files → implement with context. Replace naive append with unified diff application. <span class="badge badge-blue">~150 lines</span></p>
+
+      <h3>#4 → All Test Runner Handlers</h3>
+      <p>15 new handlers (pytest, jest, mvn, dotnet, eslint, etc.). Profile-driven file extensions. Container-aware commands. <span class="badge badge-blue">~180 lines</span></p>
+
+      <h3>#5 → Iterative Fix Loop</h3>
+      <p>Test fail → feed errors to AI → re-implement → re-test (max 3 attempts). Auto-fix lint with phpcbf/ruff/eslint before involving AI. <span class="badge badge-blue">~100 lines</span></p>
+
+      <h3>#6 → Multi-Platform PRs</h3>
+      <p>Auto-detect platform from git remote URL. Support <code>gh pr create</code>, <code>az repos pr create</code>, and GitLab. <span class="badge badge-blue">~100 lines</span></p>
+
+      <h3>#7 → Dashboard Diff View + Feedback</h3>
+      <p>Inline diff rendering, editable plan content, rejection feedback that injects into retry prompt. <span class="badge badge-orange">Deferred</span></p>
+
+      <h3>#8 → SQLite History + CI/CD Template</h3>
+      <p>Replace 10-entry JSON with queryable database. Provide GitHub Actions / Azure Pipelines YAML. <span class="badge badge-blue">~130 lines</span></p>
+
+      <h3>#9 → Trust Levels</h3>
+      <p>Four-level config: cautious → balanced → autonomous → full-auto. Consent persistence per provider. <span class="badge badge-blue">~110 lines</span></p>
+
+      <h3>#10 → Reframe the Narrative</h3>
+      <div class="pitch">"The tool that turns your sprint backlog into working branches while you sleep."</div>
+
+      <hr>
+
+      <h2 id="roadmap">Engine-First Roadmap</h2>
+      <div class="callout callout-warn">
+        <strong>Critic follow-up:</strong> "Rather than focusing on UI, focus on more concrete flow and actual coding automation."<br>
+        <strong>Response:</strong> Dashboard is chrome on a weak engine. All investment goes into making the coding pipeline reliable, self-correcting, and context-aware. Dashboard deferred to final phase.
+      </div>
+
+      <div class="phase">
+        <h3>Phase 1: Self-Correcting Pipeline <span class="badge badge-blue">Week 1-2</span></h3>
+        <p>Pipeline can implement, hit test failures, fix its own mistakes, produce passing code — without human intervention.</p>
+        <table>
+          <tr><th>#</th><th>Deliverable</th><th>Impact</th><th>Effort</th></tr>
+          <tr><td>1</td><td>Iterative fix loop (3 attempts)</td><td>Fail → learn → fix</td><td>~100 lines</td></tr>
+          <tr><td>2</td><td>Auto-fix lint errors</td><td>Eliminates 50%+ lint failures</td><td>~30 lines</td></tr>
+          <tr><td>3</td><td>Trust levels</td><td>Enables unattended batch</td><td>~110 lines</td></tr>
+          <tr><td>4</td><td>Consent persistence</td><td>Removes most annoying gate</td><td>~20 lines</td></tr>
+        </table>
+      </div>
+
+      <div class="phase">
+        <h3>Phase 2: Context-Aware Implementation <span class="badge badge-blue">Week 2-3</span></h3>
+        <p>AI receives enough codebase context to produce correct code on first attempt.</p>
+        <table>
+          <tr><th>#</th><th>Deliverable</th><th>Impact</th><th>Effort</th></tr>
+          <tr><td>5</td><td>Smart context injection</td><td>AI sees actual code</td><td>~100 lines</td></tr>
+          <tr><td>6</td><td>Diff-based merge strategy</td><td>Code lands in right place</td><td>~50 lines</td></tr>
+          <tr><td>7</td><td>Full-file replace for small files</td><td>More reliable output</td><td>~20 lines</td></tr>
+          <tr><td>8</td><td>Story quality scoring</td><td>Gate on quality threshold</td><td>~80 lines</td></tr>
+        </table>
+      </div>
+
+      <div class="phase">
+        <h3>Phase 3: Multi-Framework &amp; Multi-Platform <span class="badge badge-blue">Week 3-4</span></h3>
+        <p>Actually works for Python, React, and Java — not just Drupal.</p>
+        <table>
+          <tr><th>#</th><th>Deliverable</th><th>Effort</th></tr>
+          <tr><td>9</td><td>All test runner handlers</td><td>~180 lines</td></tr>
+          <tr><td>10</td><td>Profile-driven scoped extensions</td><td>~20 lines</td></tr>
+          <tr><td>11</td><td>Container-aware commands</td><td>~15 lines</td></tr>
+          <tr><td>12</td><td>Multi-platform PR creation</td><td>~100 lines</td></tr>
+        </table>
+      </div>
+
+      <div class="phase">
+        <h3>Phase 4: Batch Automation &amp; Learning <span class="badge badge-blue">Week 4-6</span></h3>
+        <p>Process 10 stories overnight unattended. Learn from past runs.</p>
+        <table>
+          <tr><th>#</th><th>Deliverable</th><th>Effort</th></tr>
+          <tr><td>13</td><td>Overnight batch mode + morning report</td><td>~150 lines</td></tr>
+          <tr><td>14</td><td>SQLite run history</td><td>~100 lines</td></tr>
+          <tr><td>15</td><td>History-aware retry</td><td>~30 lines</td></tr>
+          <tr><td>16</td><td>Rejection feedback storage</td><td>~50 lines</td></tr>
+          <tr><td>17</td><td>CI/CD template</td><td>~30 lines</td></tr>
+        </table>
+      </div>
+
+      <div class="phase unchanged">
+        <h3>Phase 5: Onboarding <span class="badge badge-blue">Week 6-7</span></h3>
+        <table>
+          <tr><th>#</th><th>Deliverable</th><th>Effort</th></tr>
+          <tr><td>18</td><td><code>dai init</code></td><td>~150 lines</td></tr>
+          <tr><td>19</td><td><code>dai doctor</code></td><td>~100 lines</td></tr>
+        </table>
+      </div>
+
+      <div class="phase unchanged">
+        <h3>Phase 6: Dashboard <span class="badge badge-orange">Deferred — Gated</span></h3>
+        <p>Only begins after Phase 1-4 shows engine can process 5+ stories overnight.</p>
+      </div>
+
+      <hr>
+
+      <h2 id="metrics">Success Metrics</h2>
+      <table>
+        <tr><th>Metric</th><th>Current</th><th>Phase 1-2</th><th>Phase 3-4</th></tr>
+        <tr><td>Stories producing passing code</td><td>~20%</td><td>50%</td><td>70%</td></tr>
+        <tr><td>Self-correction rate</td><td>0%</td><td>40%</td><td>60%</td></tr>
+        <tr><td>API mode accuracy</td><td>~15%</td><td>45%</td><td>60%</td></tr>
+        <tr><td>Frameworks with test runners</td><td>1/6</td><td>1/6</td><td>4/6</td></tr>
+        <tr><td>Unattended stories per night</td><td>0</td><td>3</td><td>8</td></tr>
+        <tr><td>Time: install → first run</td><td>~30 min</td><td>~30 min</td><td>&lt;5 min</td></tr>
+      </table>
+
+      <div class="pitch">"I set it up on Friday. Monday morning I had 5 branches with passing tests waiting for my review."</div>
+    </div>
+
+    <!-- ==================== TAB 3: CLAUDE CODE IMPACT ==================== -->
+    <div id="tab-impact" class="tab-content">
+      <h1>Claude Code Impact Analysis</h1>
+      <p class="subtitle">How Claude Code API changes architecture, roadmap, and success probability</p>
+
+      <h2 id="fundamental-shift">The Fundamental Shift</h2>
+
+      <div class="card">
+        <div class="card-title">Without Claude Code API</div>
+        <pre><code>Our tool = Orchestration + AI Brain + Test Runner + Git Automation
+(We're responsible for making the AI produce correct code → HARD)</code></pre>
+      </div>
+      <div class="card">
+        <div class="card-title">With Claude Code API</div>
+        <pre><code>Our tool = Orchestration + Test Runner + Git Automation
+Claude Code = AI Brain
+(We orchestrate; Claude Code produces correct code → EASY)</code></pre>
+      </div>
+
+      <h3>What Claude Code Gives Us Natively</h3>
+      <table>
+        <tr><th>Capability</th><th>We Were Building</th><th>Effort</th><th>Claude Code</th></tr>
+        <tr><td>Read files before modifying</td><td>Phase 2: Context injection</td><td>~100 lines</td><td><span class="badge badge-green">Native</span></td></tr>
+        <tr><td>Correct merge placement</td><td>Phase 2: Diff strategy</td><td>~50 lines</td><td><span class="badge badge-green">Native</span></td></tr>
+        <tr><td>Understand project structure</td><td>Phase 2: File selection</td><td>~50 lines</td><td><span class="badge badge-green">Native</span></td></tr>
+        <tr><td>Multi-file changes</td><td>Not planned (too hard)</td><td>N/A</td><td><span class="badge badge-green">Native</span></td></tr>
+        <tr><td>Self-correct test failures</td><td>Phase 1: Fix loop</td><td>~100 lines</td><td><span class="badge badge-orange">Partial</span></td></tr>
+      </table>
+
+      <hr>
+
+      <h2 id="phase-impact">Phase-by-Phase Impact</h2>
+
+      <div class="phase simplified">
+        <h3>Phase 1: Self-Correcting — <span class="badge badge-orange">Simplified ~30%</span></h3>
+        <p>Fix loop still needed for outer test→fix cycle, but internal complexity handled by Claude Code. ~40 lines instead of ~100.</p>
+      </div>
+
+      <div class="phase eliminated">
+        <h3>Phase 2: Context Injection — <span class="badge badge-red">Eliminated Entirely</span></h3>
+        <p><strong>~170 lines of the hardest code eliminated.</strong> Claude Code reads files natively, returns complete files, applies changes correctly.</p>
+      </div>
+
+      <div class="phase unchanged">
+        <h3>Phase 3: Multi-Framework — <span class="badge badge-blue">Unchanged</span></h3>
+        <p>Infrastructure problems, not AI problems. Claude Code doesn't run test suites.</p>
+      </div>
+
+      <div class="phase accelerated">
+        <h3>Phase 4: Batch Automation — <span class="badge badge-green">Accelerated</span></h3>
+        <p>Overnight batch goes from <strong>high risk (~20% success)</strong> to <strong>viable (~70-80% success)</strong>. Becomes the headline feature.</p>
+      </div>
+
+      <h3>Side-by-Side Comparison</h3>
+      <table>
+        <tr><th>Metric</th><th>Without Claude Code</th><th>With Claude Code</th><th>Delta</th></tr>
+        <tr><td>Total phases</td><td>6</td><td>5</td><td>-1 phase</td></tr>
+        <tr><td>Hardest code (context/diff)</td><td>~220 lines</td><td>0 lines</td><td><strong>Eliminated</strong></td></tr>
+        <tr><td>Total effort</td><td>~1,900 lines</td><td>~1,165 lines</td><td><strong>-39%</strong></td></tr>
+        <tr><td>Overnight success rate</td><td>~20-30%</td><td>~70-80%</td><td><strong>3-4x</strong></td></tr>
+        <tr><td>Self-correction success</td><td>~30%</td><td>~60%</td><td><strong>2x</strong></td></tr>
+        <tr><td>Time to "5 stories overnight"</td><td>Week 6+</td><td>Week 3-4</td><td><strong>~50% faster</strong></td></tr>
+        <tr><td>Dashboard necessity</td><td>High</td><td>Low</td><td>Deprioritized</td></tr>
+      </table>
+
+      <hr>
+
+      <h2 id="opus-vs-code">Clarification: Claude Opus 4.6 API ≠ Claude Code API</h2>
+
+      <div class="callout callout-warn">
+        <strong>Important distinction:</strong> Upgrading the AI model is NOT the same as gaining agentic filesystem access. They are different products.
+      </div>
+
+      <table>
+        <tr><th></th><th>Claude Opus 4.6 (Standard API)</th><th>Claude Code API</th></tr>
+        <tr><td><strong>What it is</strong></td><td>Chat/completion — send prompt, get text</td><td>Agentic — AI reads/writes files autonomously</td></tr>
+        <tr><td><strong>Filesystem</strong></td><td><span class="badge badge-red">None</span></td><td><span class="badge badge-green">Full access</span></td></tr>
+        <tr><td><strong>Merge strategy</strong></td><td>Append / manual context injection</td><td>Replace — complete correct files</td></tr>
+        <tr><td><strong>Self-correction</strong></td><td>Cannot see what it broke</td><td>Reads own output, verifies, fixes</td></tr>
+        <tr><td><strong>Phase 2 needed?</strong></td><td><span class="badge badge-red">Yes</span></td><td><span class="badge badge-green">No — eliminated</span></td></tr>
+      </table>
+
+      <pre><code>Claude Opus 4.6 Standard API = Better brain, same blindness
+Claude Code API              = Better brain + can see and touch files</code></pre>
+
+      <h2 id="three-tiers">Three Tiers of Capability</h2>
+
+      <div class="tier-grid">
+        <div class="tier">
+          <h4>Tier 1: GPT-4o</h4>
+          <p class="badge badge-blue">Current</p>
+          <div class="accuracy" style="color: var(--red);">~20%</div>
+          <p style="font-size:12px;color:var(--text-muted)">overnight success</p>
+          <p style="font-size:13px;margin-top:10px">Works, but low accuracy. Needs all 6 phases.</p>
+        </div>
+        <div class="tier recommended">
+          <h4>Tier 2: Claude Opus 4.6</h4>
+          <p class="badge badge-green">Recommended</p>
+          <div class="accuracy">~40-50%</div>
+          <p style="font-size:12px;color:var(--text-muted)">overnight success</p>
+          <p style="font-size:13px;margin-top:10px">Better quality. Same code, better results. <strong>Switch now.</strong></p>
+        </div>
+        <div class="tier future">
+          <h4>Tier 3: Claude Code</h4>
+          <p class="badge badge-purple">Future</p>
+          <div class="accuracy">~70-80%</div>
+          <p style="font-size:12px;color:var(--text-muted)">overnight success</p>
+          <p style="font-size:13px;margin-top:10px">Game-changer. Eliminates Phase 2. -39% effort.</p>
+        </div>
+      </div>
+
+      <h3>Recommendation</h3>
+      <div class="callout callout-success">
+        <strong>Build the roadmap for Tier 2. Design the architecture so Tier 3 is a drop-in upgrade, not a rewrite.</strong>
+      </div>
+      <ul>
+        <li><strong>Immediate:</strong> Switch from GPT-4o to Claude Opus 4.6 — config change, no code changes</li>
+        <li><strong>Short-term:</strong> Build the full "Without Claude Code" roadmap (all 6 phases)</li>
+        <li><strong>When available:</strong> Refactor to "With Claude Code" roadmap — drop Phase 2, simplify Phase 1</li>
+      </ul>
+
+      <hr>
+
+      <h3>Strategic Implication</h3>
+      <blockquote>We're not an AI coding tool. We're a DevOps automation layer that uses the best available AI coding engine.</blockquote>
+
+      <div class="pitch">"Claude Code writes the code. We handle everything else — stories, branches, tests, reviews, PRs, state transitions — while you sleep."</div>
+    </div>
+  </main>
+</div>
+
+<script>
+function switchTab(tabName) {
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + tabName).classList.add('active');
+  document.querySelectorAll('.tab-btn').forEach(b => {
+    if ((tabName === 'critic' && b.textContent.includes('Critical')) ||
+        (tabName === 'response' && b.textContent.includes('Architectural')) ||
+        (tabName === 'impact' && b.textContent.includes('Claude'))) {
+      b.classList.add('active');
+    }
+  });
+  // Scroll to anchor if hash target exists
+  const hash = event && event.target && event.target.getAttribute ? event.target.getAttribute('href') : null;
+  if (hash && hash.startsWith('#')) {
+    setTimeout(() => {
+      const el = document.querySelector(hash);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 50);
+  }
+}
+</script>
+</body>
+</html>

@@ -7,6 +7,7 @@ project:
   name: "dconnector933"
   workspace_dir: "/home/pankajraundal/localsetup/dconnector933"
   module_path: "web/modules/contrib/lionbridge_translation_provider"
+  framework: "drupal"          # drupal | python | react | java | dotnet | angular
   base_branch: "master"
   branch_prefix: "feature"
 
