@@ -1,0 +1,85 @@
+# DevOps AI Agent — Nightly Batch Pipeline
+# Runs `dai run-all --trust full-auto` on a schedule.
+#
+# Required secrets:
+#   AZURE_DEVOPS_PAT     — Azure DevOps personal access token
+#   ANTHROPIC_API_KEY    — (if using Anthropic provider)
+#   OPENAI_API_KEY       — (if using OpenAI provider)
+#   GITHUB_TOKEN         — (if using Copilot provider, or for PR creation)
+#
+# Copy this file to .github/workflows/dai-nightly.yml in your target project.
+
+name: DevOps AI Agent — Nightly Batch
+
+on:
+  schedule:
+    # Runs at 2:00 AM UTC every weeknight (Mon-Fri)
+    - cron: "0 2 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      skip_tests:
+        description: "Skip test execution"
+        type: boolean
+        default: false
+      trust_level:
+        description: "Trust level override"
+        type: choice
+        options:
+          - full-auto
+          - autonomous
+          - balanced
+          - cautious
+        default: full-auto
+
+jobs:
+  batch-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout target project
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for branch operations
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install DevOps AI Agent
+        run: pip install devops-ai-agent
+
+      - name: Configure Azure DevOps CLI
+        run: |
+          az extension add --name azure-devops
+          echo "${{ secrets.AZURE_DEVOPS_PAT }}" | az devops login
+        env:
+          AZURE_DEVOPS_EXT_PAT: ${{ secrets.AZURE_DEVOPS_PAT }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "DevOps AI Agent"
+          git config user.email "dai-bot@noreply.github.com"
+
+      - name: Run batch pipeline
+        run: |
+          TRUST="${{ github.event.inputs.trust_level || 'full-auto' }}"
+          SKIP=""
+          if [ "${{ github.event.inputs.skip_tests }}" = "true" ]; then
+            SKIP="--skip-tests"
+          fi
+          dai run-all --trust "$TRUST" $SKIP
+        env:
+          AZURE_DEVOPS_PAT: ${{ secrets.AZURE_DEVOPS_PAT }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload run history
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dai-history-${{ github.run_number }}
+          path: .dai/history.db
+          retention-days: 30

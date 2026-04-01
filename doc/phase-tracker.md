@@ -14,8 +14,8 @@
 | 1 | Self-Correcting Pipeline | ✅ COMPLETE | 6 | 6/6 |
 | 2 | Context-Aware Implementation | ✅ COMPLETE | 3 | 3/3 |
 | 3 | Multi-Framework & Multi-Platform | ✅ COMPLETE | 4 | 4/4 |
-| 4 | Batch Automation & Learning | 🔲 NOT STARTED | 5 | 0/5 |
-| 5 | Onboarding & Setup | 🔲 NOT STARTED | 2 | 0/2 |
+| 4 | Batch Automation & Learning | ✅ COMPLETE | 5 | 5/5 |
+| 5 | Onboarding & Setup | ✅ COMPLETE | 2 | 2/2 |
 | 6 | Dashboard (Deferred) | 🔲 GATED | 3 | 0/3 |
 
 ---
@@ -71,34 +71,34 @@
 
 ---
 
-## Phase 4: Batch Automation & Learning 🔲 NOT STARTED
+## Phase 4: Batch Automation & Learning ✅ COMPLETE
 
 **Goal:** Process 10 stories overnight unattended. Learn from past runs.
 
-**Prerequisite:** Phase 3 complete.
+**Prerequisite:** Phase 3 complete. ✅
 
 | # | Item | Effort | Critic Issue | Status |
 |---|------|--------|--------------|--------|
-| 13 | Overnight batch mode — `dai run-all --trust full-auto` with morning summary | ~150 lines | #9, #10 | 🔲 |
-| 14 | SQLite run history (replace 10-entry JSON) | ~100 lines | #8 | 🔲 |
-| 15 | History-aware retry (inject past failure attempts into AI context) | ~30 lines | #5 | 🔲 |
-| 16 | Rejection feedback storage (capture user edit deltas) | ~50 lines | #7 | 🔲 |
-| 17 | CI/CD template (GitHub Actions / Azure Pipelines YAML) | ~30 lines | #8 | 🔲 |
+| 13 | Overnight batch mode — `dai run-all --trust full-auto` with morning summary | ~150 lines | #9, #10 | ✅ Done |
+| 14 | SQLite run history (`src/history.py` — replaces JSON) | ~100 lines | #8 | ✅ Done |
+| 15 | History-aware retry (past errors + feedback injected into AI context) | ~30 lines | #5 | ✅ Done |
+| 16 | Rejection feedback storage (`save_feedback` / `load_feedback_for_story`) | ~50 lines | #7 | ✅ Done |
+| 17 | CI/CD templates (GitHub Actions + Azure Pipelines YAML) | ~30 lines | #8 | ✅ Done |
 
 **Validation:** 8-story overnight run. Target: 5+ branches with passing tests by morning.
 
 ---
 
-## Phase 5: Onboarding & Setup 🔲 NOT STARTED
+## Phase 5: Onboarding & Setup ✅ COMPLETE
 
 **Goal:** New users go from install to first successful run in under 5 minutes.
 
-**Prerequisite:** Phase 4 complete.
+**Prerequisite:** Phase 4 complete. ✅
 
 | # | Item | Effort | Critic Issue | Status |
 |---|------|--------|--------------|--------|
-| 18 | `dai init` — interactive setup wizard, auto-detect workspace/org/auth | ~150 lines | #1 | 🔲 |
-| 19 | `dai doctor` — environment health check with actionable fixes | ~100 lines | #1 | 🔲 |
+| 18 | `dai init` — interactive setup wizard with auto-detection (framework, env type, base branch) | ~150 lines | #1 | ✅ Done |
+| 19 | `dai doctor` — 10-point health check (Python, git, workspace, module, branch, az CLI, config, AI provider, env type, gh CLI) | ~100 lines | #1 | ✅ Done |
 
 **Validation:** Hand tool to a new developer. Time from `pip install` to first `dai fetch` succeeds: <5 minutes.
 
@@ -124,6 +124,8 @@
 
 | Date | Change |
 |------|--------|
+| 2026-04-01 | Phase 5 completed: `dai init` setup wizard (auto-detects framework, env type, base branch, generates config.local.yaml), `dai doctor` 10-point health check with actionable error messages. 29 new tests, 95 total passing. |
+| 2026-04-01 | Phase 4 completed: SQLite history.py (replaces JSON), history-aware retry with feedback injection, batch mode with --trust override and summary report, rejection feedback tables, CI/CD templates (GitHub Actions + Azure Pipelines), `dai history` command. 12 new tests, 66 total passing. |
 | 2026-04-01 | Phase 3 completed: 14 test runner handlers across 6 frameworks, profile-driven extensions, container-aware commands (_needs_container/_cmd), multi-platform PR creation (GitHub/ADO/GitLab). 28 new tests, 54 total passing. |
 | 2026-03-30 | Phase 2 completed: two-pass context injection (_select_relevant_files + _read_file_contents), smart merge (_smart_merge for PHP/Python), auto-replace for small files (_looks_like_complete_file). 18 new tests, 26 total passing. |
 | 2026-03-30 | Phase 1 completed: iterative fix loop, auto-fix lint, trust levels, consent persistence, story quality scoring, config updates. All 8 tests passing. |

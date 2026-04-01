@@ -95,12 +95,25 @@ def from_zendesk(ctx, ticket_id):
 @main.command(name="run-all")
 @click.option("--skip-tests", is_flag=True, help="Skip test execution")
 @click.option("--dry-run", is_flag=True, help="Dry run mode")
+@click.option("--trust", type=click.Choice(["cautious", "balanced", "autonomous", "full-auto"]),
+              default=None, help="Override trust level for this batch run")
 @click.pass_context
-def run_all(ctx, skip_tests, dry_run):
-    """Fetch all matching stories and run the pipeline on each sequentially."""
-    from .pipeline import Pipeline
+def run_all(ctx, skip_tests, dry_run, trust):
+    """Fetch all matching stories and run the pipeline on each sequentially.
 
-    pipeline = Pipeline(ctx.obj["config"])
+    For overnight unattended runs, use: dai run-all --trust full-auto
+    """
+    from .pipeline import Pipeline
+    from .history import generate_batch_summary, load_run_history
+
+    config = ctx.obj["config"]
+    if trust:
+        config.setdefault("ai_agent", {})["trust_level"] = trust
+        console.print(f"[dim]Trust level overridden to: {trust}[/]")
+
+    batch_start = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
+
+    pipeline = Pipeline(config)
     all_results = pipeline.run_queue(skip_tests=skip_tests, dry_run=dry_run)
 
     if not all_results:
@@ -123,8 +136,53 @@ def run_all(ctx, skip_tests, dry_run):
 
     console.print(table)
 
+    # Print batch summary report.
+    summary = generate_batch_summary(since=batch_start)
+    console.print(f"\n{summary}")
+
     if any_failed:
         sys.exit(1)
+
+
+@main.command()
+@click.option("--story-id", "-s", type=int, default=None, help="Filter by work item ID")
+@click.option("--limit", "-n", type=int, default=20, help="Number of records to show")
+@click.pass_context
+def history(ctx, story_id, limit):
+    """Show pipeline run history from SQLite database."""
+    from .history import load_run_history, load_runs_for_story
+
+    if story_id:
+        records = load_runs_for_story(story_id)
+    else:
+        records = load_run_history(ctx.obj["config"], limit=limit)
+
+    if not records:
+        console.print("[yellow]No run history found.[/]")
+        return
+
+    table = Table(title=f"Run History ({len(records)} records)")
+    table.add_column("ID", style="dim")
+    table.add_column("Story", style="cyan")
+    table.add_column("Result")
+    table.add_column("Method")
+    table.add_column("Branch")
+    table.add_column("Fixes", justify="right")
+    table.add_column("Timestamp", style="dim")
+
+    for r in records:
+        status = "[green]PASS[/]" if not r.get("failed_stage") else f"[red]{r['failed_stage']}[/]"
+        table.add_row(
+            str(r.get("id", "")),
+            f"#{r.get('work_item_id', '')}",
+            status,
+            r.get("method", ""),
+            r.get("branch", "")[:40],
+            str(r.get("fix_attempts", 0)),
+            r.get("timestamp", "")[:19],
+        )
+
+    console.print(table)
 
 
 @main.command()
@@ -201,7 +259,7 @@ def watch(ctx):
     seen_ids: set[int] = set()
 
     # Pre-populate seen_ids from local run history (avoid re-processing).
-    from .agent.context_builder import load_run_history
+    from .history import load_run_history
 
     for record in load_run_history(config):
         wid = record.get("work_item_id")
@@ -252,6 +310,27 @@ def webhook(ctx, port):
     app = create_app(config, on_devops, on_zendesk)
     console.print(f"[bold]Webhook server listening on port {port}[/]")
     app.run(host="0.0.0.0", port=port)
+
+
+@main.command(name="init")
+def init_cmd():
+    """Interactive setup wizard — creates config.local.yaml."""
+    from .setup import run_init
+
+    run_init()
+
+
+@main.command()
+@click.pass_context
+def doctor(ctx):
+    """Check environment health — verifies config, tools, and auth."""
+    from .setup import run_doctor, print_doctor_results
+
+    config = ctx.obj["config"]
+    checks = run_doctor(config)
+    all_ok = print_doctor_results(checks)
+    if not all_ok:
+        sys.exit(1)
 
 
 @main.command()

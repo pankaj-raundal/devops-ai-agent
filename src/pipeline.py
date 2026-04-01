@@ -8,7 +8,8 @@ from enum import Enum
 from pathlib import Path
 
 from .agent.analyzer import StoryAnalyzer
-from .agent.context_builder import build_story_context, build_history_context, save_story_context, save_run_record
+from .agent.context_builder import build_story_context, save_story_context
+from .history import build_history_context, save_run_record
 from .agent.implement import ImplementationAgent
 from .agent.plan import ImplementationPlan, apply_plan
 from .integrations.azure_devops import AzureDevOpsClient

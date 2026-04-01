@@ -1,0 +1,82 @@
+# DevOps AI Agent — Nightly Batch Pipeline (Azure Pipelines)
+# Runs `dai run-all --trust full-auto` on a schedule.
+#
+# Required variables (set in Pipeline Library or variable group):
+#   AZURE_DEVOPS_PAT     — Azure DevOps personal access token
+#   ANTHROPIC_API_KEY    — (if using Anthropic provider)
+#   OPENAI_API_KEY       — (if using OpenAI provider)
+#   GITHUB_TOKEN         — (if using Copilot provider, or for PR creation)
+#
+# Copy this file to your target project's repo as azure-pipelines-dai.yml.
+
+trigger: none
+
+schedules:
+  - cron: "0 2 * * 1-5"   # 2:00 AM UTC, Mon-Fri
+    displayName: "Nightly batch run"
+    branches:
+      include:
+        - main
+        - master
+    always: true
+
+parameters:
+  - name: trustLevel
+    displayName: "Trust level"
+    type: string
+    default: "full-auto"
+    values:
+      - full-auto
+      - autonomous
+      - balanced
+      - cautious
+  - name: skipTests
+    displayName: "Skip tests"
+    type: boolean
+    default: false
+
+pool:
+  vmImage: "ubuntu-latest"
+
+steps:
+  - checkout: self
+    fetchDepth: 0
+
+  - task: UsePythonVersion@0
+    inputs:
+      versionSpec: "3.12"
+
+  - script: pip install devops-ai-agent
+    displayName: "Install DevOps AI Agent"
+
+  - script: |
+      az extension add --name azure-devops
+      echo $(AZURE_DEVOPS_PAT) | az devops login
+    displayName: "Configure Azure DevOps CLI"
+    env:
+      AZURE_DEVOPS_EXT_PAT: $(AZURE_DEVOPS_PAT)
+
+  - script: |
+      git config user.name "DevOps AI Agent"
+      git config user.email "dai-bot@noreply.azure.com"
+    displayName: "Configure Git"
+
+  - script: |
+      SKIP=""
+      if [ "${{ parameters.skipTests }}" = "True" ]; then
+        SKIP="--skip-tests"
+      fi
+      dai run-all --trust "${{ parameters.trustLevel }}" $SKIP
+    displayName: "Run batch pipeline"
+    env:
+      AZURE_DEVOPS_PAT: $(AZURE_DEVOPS_PAT)
+      ANTHROPIC_API_KEY: $(ANTHROPIC_API_KEY)
+      OPENAI_API_KEY: $(OPENAI_API_KEY)
+      GITHUB_TOKEN: $(GITHUB_TOKEN)
+
+  - task: PublishBuildArtifacts@1
+    condition: always()
+    inputs:
+      pathToPublish: ".dai/history.db"
+      artifactName: "dai-history"
+    displayName: "Upload run history"
