@@ -165,10 +165,9 @@ class GitManager:
         description: str = "",
         branch_name: str = "",
     ) -> dict:
-        """Create a Pull Request using GitHub CLI (``gh pr create``).
+        """Create a Pull Request on the detected platform (GitHub, Azure DevOps, or GitLab).
 
-        Pushes the branch first if needed, then creates a PR targeting
-        ``pr_target_branch`` (or ``base_branch`` if not configured).
+        Detects the platform from the git remote URL and uses the appropriate CLI.
 
         Returns dict with ``success``, ``url``, and ``error`` keys.
         """
@@ -177,7 +176,36 @@ class GitManager:
 
         target = self.pr_target_branch or self.base_branch
 
-        # Build PR title and body.
+        platform = self._detect_platform()
+        logger.info("Detected git platform: %s", platform)
+
+        if platform == "azure-devops":
+            return self._create_pr_azure_devops(work_item_id, title, description, branch_name, target)
+        elif platform == "gitlab":
+            return self._create_pr_gitlab(work_item_id, title, description, branch_name, target)
+        else:
+            return self._create_pr_github(work_item_id, title, description, branch_name, target)
+
+    def _detect_platform(self) -> str:
+        """Detect git platform from the origin remote URL."""
+        try:
+            remote_url = self._run("remote", "get-url", "origin")
+        except RuntimeError:
+            return "github"  # Default fallback.
+
+        remote_lower = remote_url.lower()
+        if "dev.azure.com" in remote_lower or "visualstudio.com" in remote_lower:
+            return "azure-devops"
+        elif "gitlab" in remote_lower:
+            return "gitlab"
+        else:
+            return "github"
+
+    def _create_pr_github(
+        self, work_item_id: int, title: str, description: str,
+        branch_name: str, target: str,
+    ) -> dict:
+        """Create PR via GitHub CLI (``gh pr create``)."""
         pr_title = f"#{work_item_id} - {title}"
         pr_body = (
             f"## Azure DevOps Work Item #{work_item_id}\n\n"
@@ -196,17 +224,14 @@ class GitManager:
                     "--body", pr_body,
                 ],
                 cwd=self.workspace_dir,
-                capture_output=True,
-                text=True,
-                timeout=60,
+                capture_output=True, text=True, timeout=60,
             )
             if result.returncode == 0:
                 pr_url = result.stdout.strip()
-                logger.info("PR created: %s", pr_url)
+                logger.info("GitHub PR created: %s", pr_url)
                 return {"success": True, "url": pr_url, "error": ""}
             else:
                 error = result.stderr.strip()
-                # PR might already exist — not an error.
                 if "already exists" in error.lower():
                     logger.info("PR already exists for branch %s.", branch_name)
                     return {"success": True, "url": "(already exists)", "error": ""}
@@ -216,5 +241,89 @@ class GitManager:
             logger.error("GitHub CLI (gh) not found. Install: https://cli.github.com/")
             return {"success": False, "url": "", "error": "gh CLI not installed"}
         except subprocess.TimeoutExpired:
-            logger.error("gh pr create timed out.")
-            return {"success": False, "url": "", "error": "Timed out"}
+            return {"success": False, "url": "", "error": "gh pr create timed out"}
+
+    def _create_pr_azure_devops(
+        self, work_item_id: int, title: str, description: str,
+        branch_name: str, target: str,
+    ) -> dict:
+        """Create PR via Azure DevOps CLI (``az repos pr create``)."""
+        pr_title = f"#{work_item_id} - {title}"
+        pr_description = (
+            f"Azure DevOps Work Item #{work_item_id}\n\n"
+            f"{description[:2000] if description else 'Automated PR by DevOps AI Agent.'}"
+        )
+
+        try:
+            cmd = [
+                "az", "repos", "pr", "create",
+                "--source-branch", branch_name,
+                "--target-branch", target,
+                "--title", pr_title,
+                "--description", pr_description,
+                "--work-items", str(work_item_id),
+                "--output", "json",
+            ]
+            result = subprocess.run(
+                cmd, cwd=self.workspace_dir,
+                capture_output=True, text=True, timeout=60,
+            )
+            if result.returncode == 0:
+                import json
+                data = json.loads(result.stdout)
+                pr_url = data.get("url", data.get("webUrl", ""))
+                logger.info("Azure DevOps PR created: %s", pr_url)
+                return {"success": True, "url": pr_url, "error": ""}
+            else:
+                error = result.stderr.strip()
+                if "already exists" in error.lower() or "active pull request already exists" in error.lower():
+                    logger.info("PR already exists for branch %s.", branch_name)
+                    return {"success": True, "url": "(already exists)", "error": ""}
+                logger.error("az repos pr create failed: %s", error)
+                return {"success": False, "url": "", "error": error}
+        except FileNotFoundError:
+            logger.error("Azure CLI (az) not found. Install: https://learn.microsoft.com/en-us/cli/azure/install-azure-cli")
+            return {"success": False, "url": "", "error": "az CLI not installed"}
+        except subprocess.TimeoutExpired:
+            return {"success": False, "url": "", "error": "az repos pr create timed out"}
+
+    def _create_pr_gitlab(
+        self, work_item_id: int, title: str, description: str,
+        branch_name: str, target: str,
+    ) -> dict:
+        """Create Merge Request via GitLab CLI (``glab mr create``)."""
+        mr_title = f"#{work_item_id} - {title}"
+        mr_body = (
+            f"Azure DevOps Work Item #{work_item_id}\n\n"
+            f"{description[:2000] if description else 'Automated MR by DevOps AI Agent.'}"
+        )
+
+        try:
+            result = subprocess.run(
+                [
+                    "glab", "mr", "create",
+                    "--source-branch", branch_name,
+                    "--target-branch", target,
+                    "--title", mr_title,
+                    "--description", mr_body,
+                    "--no-editor",
+                ],
+                cwd=self.workspace_dir,
+                capture_output=True, text=True, timeout=60,
+            )
+            if result.returncode == 0:
+                mr_url = result.stdout.strip()
+                logger.info("GitLab MR created: %s", mr_url)
+                return {"success": True, "url": mr_url, "error": ""}
+            else:
+                error = result.stderr.strip()
+                if "already exists" in error.lower():
+                    logger.info("MR already exists for branch %s.", branch_name)
+                    return {"success": True, "url": "(already exists)", "error": ""}
+                logger.error("glab mr create failed: %s", error)
+                return {"success": False, "url": "", "error": error}
+        except FileNotFoundError:
+            logger.error("GitLab CLI (glab) not found. Install: https://gitlab.com/gitlab-org/cli")
+            return {"success": False, "url": "", "error": "glab CLI not installed"}
+        except subprocess.TimeoutExpired:
+            return {"success": False, "url": "", "error": "glab mr create timed out"}

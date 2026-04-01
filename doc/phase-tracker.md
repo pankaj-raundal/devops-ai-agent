@@ -13,7 +13,7 @@
 |-------|------|--------|-------|-----------|
 | 1 | Self-Correcting Pipeline | ✅ COMPLETE | 6 | 6/6 |
 | 2 | Context-Aware Implementation | ✅ COMPLETE | 3 | 3/3 |
-| 3 | Multi-Framework & Multi-Platform | 🔲 NOT STARTED | 4 | 0/4 |
+| 3 | Multi-Framework & Multi-Platform | ✅ COMPLETE | 4 | 4/4 |
 | 4 | Batch Automation & Learning | 🔲 NOT STARTED | 5 | 0/5 |
 | 5 | Onboarding & Setup | 🔲 NOT STARTED | 2 | 0/2 |
 | 6 | Dashboard (Deferred) | 🔲 GATED | 3 | 0/3 |
@@ -54,18 +54,18 @@
 
 ---
 
-## Phase 3: Multi-Framework & Multi-Platform 🔲 NOT STARTED
+## Phase 3: Multi-Framework & Multi-Platform ✅ COMPLETE
 
 **Goal:** Tool works for Python, React, Java — not just Drupal. PRs work with Azure DevOps repos, not just GitHub.
 
-**Prerequisite:** Phase 2 complete.
+**Prerequisite:** Phase 2 complete. ✅
 
 | # | Item | Effort | Critic Issue | Status |
 |---|------|--------|--------------|--------|
-| 9 | All test runner handlers (`pytest`, `ruff`, `mypy`, `jest`, `eslint`, `tsc`, `mvn test`, `dotnet test`) | ~180 lines | #4 | 🔲 |
-| 10 | Profile-driven scoped extensions (pull lintable file extensions from profile) | ~20 lines | #4 | 🔲 |
-| 11 | Container-aware command building (DDEV/Docker only when needed) | ~15 lines | #4 | 🔲 |
-| 12 | Multi-platform PR creation (detect GitHub/ADO/GitLab from remote URL) | ~100 lines | #6 | 🔲 |
+| 9 | All test runner handlers (`pytest`, `ruff`, `mypy`, `jest`, `eslint`, `tsc`, `ng_test`, `ng_lint`, `mvn_test`, `checkstyle`, `spotbugs`, `dotnet_test`, `dotnet_format`, `dotnet_build`) | ~180 lines | #4 | ✅ Done |
+| 10 | Profile-driven scoped extensions (pull lintable file extensions from profile) | ~20 lines | #4 | ✅ Done |
+| 11 | Container-aware command building (`_needs_container()`, `_cmd()` — DDEV/Docker only when needed) | ~15 lines | #4 | ✅ Done |
+| 12 | Multi-platform PR creation (`_detect_platform()` from remote URL → GitHub/ADO/GitLab) | ~100 lines | #6 | ✅ Done |
 
 **Validation:** Run a Python project story end-to-end: `dai run` → branch → implement → pytest + ruff pass → review → PR.
 
@@ -124,5 +124,6 @@
 
 | Date | Change |
 |------|--------|
+| 2026-04-01 | Phase 3 completed: 14 test runner handlers across 6 frameworks, profile-driven extensions, container-aware commands (_needs_container/_cmd), multi-platform PR creation (GitHub/ADO/GitLab). 28 new tests, 54 total passing. |
 | 2026-03-30 | Phase 2 completed: two-pass context injection (_select_relevant_files + _read_file_contents), smart merge (_smart_merge for PHP/Python), auto-replace for small files (_looks_like_complete_file). 18 new tests, 26 total passing. |
 | 2026-03-30 | Phase 1 completed: iterative fix loop, auto-fix lint, trust levels, consent persistence, story quality scoring, config updates. All 8 tests passing. |
