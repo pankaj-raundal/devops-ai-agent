@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .agent.analyzer import StoryAnalyzer
 from .agent.context_builder import build_story_context, save_story_context
-from .history import build_history_context, save_run_record
+from .history import build_history_context, load_runs_for_story, save_run_record
 from .agent.implement import ImplementationAgent
 from .agent.plan import ImplementationPlan, apply_plan
 from .integrations.azure_devops import AzureDevOpsClient
@@ -18,6 +18,7 @@ from .integrations.zendesk import ZendeskClient
 from .reviewer.ai_reviewer import AIReviewer
 from .reviewer.test_runner import TestRunner
 from .utils.events import PipelineEvent, event_bus
+from .utils.ticket_logger import TicketLogger
 
 logger = logging.getLogger("devops_ai_agent.pipeline")
 
@@ -45,7 +46,7 @@ class PipelineResult:
 class Pipeline:
     """End-to-end pipeline: Fetch → Analyze → Branch → Implement → Test → Review → Write-back."""
 
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, ci_mode: bool = False):
         self.config = config
         self.devops = AzureDevOpsClient(config)
         self.git = GitManager(config)
@@ -70,6 +71,16 @@ class Pipeline:
         self.max_fix_attempts = ai_cfg.get("max_fix_attempts", 3)
         self.min_story_quality = ai_cfg.get("min_story_quality", 4)
 
+        # CI mode: suppress all interactive prompts and auto-approve everything.
+        # Activated by --ci flag or when running in a non-TTY environment (e.g. GitHub Actions).
+        import sys
+        self.ci_mode = ci_mode or not sys.stdin.isatty()
+        if self.ci_mode:
+            logger.info("CI mode active — all interactive gates suppressed, auto-approving.")
+            self.trust_level = "full-auto"
+            self.implementer.require_consent = False
+            self.reviewer.require_consent = False if hasattr(self.reviewer, "require_consent") else None
+
     def set_plan_approval_callback(self, callback: callable) -> None:
         """Set a callback for plan approval (used by dashboard).
 
@@ -86,8 +97,13 @@ class Pipeline:
         """
         self._push_approval_callback = callback
 
-    def run(self, work_item_id: int | None = None, skip_tests: bool = False, dry_run: bool = False) -> list[PipelineResult]:
-        """Execute the full pipeline. If work_item_id is None, fetch latest."""
+    def run(self, work_item_id: int | None = None, skip_tests: bool = False, skip_analysis: bool = False, dry_run: bool = False, fresh: bool = False, skip_git_add: bool = False) -> list[PipelineResult]:
+        """Execute the full pipeline. If work_item_id is None, fetch latest.
+
+        If fresh=True, deletes any existing feature branch and starts clean.
+        If skip_analysis=True, skips the AI analysis stage to save API quota.
+        If skip_git_add=True, AI writes files but does not commit/push/PR.
+        """
         results: list[PipelineResult] = []
         if not self._queue_mode:
             event_bus.clear_history()
@@ -110,6 +126,26 @@ class Pipeline:
         results.append(PipelineResult(Stage.FETCH_STORY, True, details={
             "id": work_item.id, "title": work_item.title
         }))
+
+        # Thread story_id to all agents for token usage tracking.
+        self.analyzer.story_id = work_item.id
+        self.implementer.story_id = work_item.id
+        self.reviewer.story_id = work_item.id
+
+        # Create per-ticket log file in the devops-ai-agent directory (not the project workspace).
+        tlog = TicketLogger(work_item.id)
+        tlog.section("Story Fetched")
+        tlog.kv("ID", str(work_item.id))
+        tlog.kv("Title", work_item.title)
+        tlog.kv("Type", work_item.work_item_type)
+        tlog.kv("State", work_item.state)
+        tlog.kv("Tags", work_item.tags)
+        tlog.kv("Description", work_item.description[:1000])
+        tlog.kv("Acceptance Criteria", work_item.acceptance_criteria[:1000])
+        tlog.kv("Comments", str(len(work_item.comments)))
+        # Thread ticket logger to implementation agent so it can log AI I/O.
+        self.implementer.ticket_logger = tlog
+
         event_bus.emit(PipelineEvent("fetch_story", "pass", f"#{work_item.id} {work_item.title}", {
             "id": work_item.id,
             "title": work_item.title,
@@ -132,6 +168,8 @@ class Pipeline:
         event_bus.emit(PipelineEvent("build_context", "running", "Building story context..."))
         story_context = build_story_context(work_item, self.config)
         save_story_context(work_item, self.config)
+        tlog.section("Story Context Sent to AI")
+        tlog.write(story_context)
         event_bus.emit(PipelineEvent("build_context", "pass", f"Context built ({len(story_context):,} chars)", {
             "context_length": len(story_context),
             "preview": story_context[:300],
@@ -147,92 +185,123 @@ class Pipeline:
             }))
             return results
 
-        # --- Stage 2: AI Analysis ---
-        event_bus.emit(PipelineEvent("analyze", "running", f"AI analyzing story via {self.analyzer.provider}/{self.analyzer.model}..."))
-        logger.info("=== Stage 2: AI Analysis ===")
-        analysis = self.analyzer.analyze(story_context)
-        analysis_md = analysis.to_markdown()
+        # --- Stage 2: AI Analysis (non-blocking) ---
+        # Analysis is helpful but not required — if it fails (e.g. rate limit),
+        # skip it and proceed to implementation.
+        if skip_analysis:
+            logger.info("=== Stage 2: AI Analysis (skipped via --skip-analysis) ===")
+            event_bus.emit(PipelineEvent("analyze", "skipped", "Skipped via --skip-analysis"))
+            results.append(PipelineResult(Stage.ANALYZE, True, details={"skipped": True}))
+        else:
+            event_bus.emit(PipelineEvent("analyze", "running", f"AI analyzing story via {self.analyzer.provider}/{self.analyzer.model}..."))
+            logger.info("=== Stage 2: AI Analysis ===")
+            analysis = self.analyzer.analyze(story_context)
+            analysis_md = analysis.to_markdown()
+            analysis_failed = analysis.summary.startswith("Analysis failed:")
 
-        results.append(PipelineResult(Stage.ANALYZE, bool(analysis.summary), details={
-            "requires_code_change": analysis.requires_code_change,
-            "confidence": analysis.confidence,
-            "complexity": analysis.estimated_complexity,
-            "summary": analysis.summary[:300],
-        }))
-
-        if not analysis.summary:
-            event_bus.emit(PipelineEvent("analyze", "fail", "AI analysis returned empty result"))
-            return results
-
-        event_bus.emit(PipelineEvent("analyze", "pass",
-                                     f"Code change: {'Yes' if analysis.requires_code_change else 'No'} | "
-                                     f"Confidence: {analysis.confidence} | Complexity: {analysis.estimated_complexity}", {
-                                         "requires_code_change": analysis.requires_code_change,
-                                         "confidence": analysis.confidence,
-                                         "complexity": analysis.estimated_complexity,
-                                         "summary": analysis.summary[:500],
-                                         "approach": analysis.approach[:500],
-                                         "risks": analysis.risks,
-                                         "questions": analysis.questions,
-                                         "affected_areas": analysis.affected_areas,
-                                         "recommendation": analysis.recommendation[:500],
-                                     }))
-        logger.info("Analysis: code_change=%s, confidence=%s, complexity=%s",
-                     analysis.requires_code_change, analysis.confidence, analysis.estimated_complexity)
-
-        # Write analysis back to Azure DevOps as a comment.
-        event_bus.emit(PipelineEvent("write_back", "running", "Writing analysis to Azure DevOps..."))
-        self._write_back_comment(work_item.id, zendesk_ticket_id, analysis_md)
-        event_bus.emit(PipelineEvent("write_back", "pass", "Analysis posted to work item"))
-
-        # --- Smart Flow Decision ---
-        # Check story quality before expensive implementation.
-        quality_score = self._assess_story_quality(work_item, analysis)
-        if quality_score < self.min_story_quality and analysis.requires_code_change:
-            logger.warning("Story quality too low (%d/%d). Posting feedback to ADO.", quality_score, 10)
-            quality_msg = self._build_quality_feedback(work_item, analysis, quality_score)
-            self._write_back_comment(work_item.id, zendesk_ticket_id, quality_msg)
-            event_bus.emit(PipelineEvent("analyze", "fail",
-                f"Story quality too low ({quality_score}/10) — posted feedback to ADO", {
-                    "quality_score": quality_score,
-                }))
-            self._emit_alert("warning", f"Story #{work_item.id} skipped: quality {quality_score}/10")
-            self._transition_state(work_item.id, self.state_on_no_code)
-            results.append(PipelineResult(Stage.ANALYZE, False, error=f"Story quality {quality_score}/10 (min: {self.min_story_quality})"))
-            return results
-
-        if not analysis.requires_code_change:
-            # No code change needed — summarize findings and complete.
-            logger.info("AI determined no code change is required. Writing summary and completing.")
-            event_bus.emit(PipelineEvent("complete", "pass",
-                                         f"No code change needed — analysis posted to #{work_item.id}", {
-                                             "work_item_id": work_item.id,
-                                             "requires_code_change": False,
-                                             "recommendation": analysis.recommendation,
-                                         }))
-            event_bus.emit(PipelineEvent("alert", "pass",
-                                         f"Story #{work_item.id}: No code change required. Recommendation posted to ticket.",
-                                         {"type": "info"}))
-            # Transition state → Evaluation (no code change).
-            self._transition_state(work_item.id, self.state_on_no_code)
-
-            results.append(PipelineResult(Stage.COMPLETE, True, details={
-                "work_item_id": work_item.id,
-                "requires_code_change": False,
+            results.append(PipelineResult(Stage.ANALYZE, not analysis_failed, details={
+                "requires_code_change": analysis.requires_code_change,
+                "confidence": analysis.confidence,
+                "complexity": analysis.estimated_complexity,
+                "summary": analysis.summary[:300],
             }))
-            save_run_record(self.config, {
-                "work_item_id": work_item.id,
-                "failed_stage": None,
-                "requires_code_change": False,
-                "analysis_summary": analysis.summary[:300],
-            })
-            return results
+
+            if analysis_failed:
+                logger.warning("Analysis failed — skipping quality gate and proceeding to implementation.")
+                event_bus.emit(PipelineEvent("analyze", "warning",
+                    f"Analysis skipped: {analysis.summary[:100]} — proceeding to implementation"))
+            elif not analysis.summary:
+                event_bus.emit(PipelineEvent("analyze", "fail", "AI analysis returned empty result"))
+                return results
+            else:
+                event_bus.emit(PipelineEvent("analyze", "pass",
+                                         f"Code change: {'Yes' if analysis.requires_code_change else 'No'} | "
+                                         f"Confidence: {analysis.confidence} | Complexity: {analysis.estimated_complexity}", {
+                                             "requires_code_change": analysis.requires_code_change,
+                                             "confidence": analysis.confidence,
+                                             "complexity": analysis.estimated_complexity,
+                                             "summary": analysis.summary[:500],
+                                             "approach": analysis.approach[:500],
+                                             "risks": analysis.risks,
+                                             "questions": analysis.questions,
+                                             "affected_areas": analysis.affected_areas,
+                                             "recommendation": analysis.recommendation[:500],
+                                         }))
+                logger.info("Analysis: code_change=%s, confidence=%s, complexity=%s",
+                             analysis.requires_code_change, analysis.confidence, analysis.estimated_complexity)
+
+                # Write analysis back to Azure DevOps as a comment.
+                event_bus.emit(PipelineEvent("write_back", "running", "Writing analysis to Azure DevOps..."))
+                self._write_back_comment(work_item.id, zendesk_ticket_id, analysis_md)
+                event_bus.emit(PipelineEvent("write_back", "pass", "Analysis posted to work item"))
+
+                # --- Smart Flow Decision ---
+                # Check story quality before expensive implementation.
+                quality_score = self._assess_story_quality(work_item, analysis)
+                if quality_score < self.min_story_quality and analysis.requires_code_change:
+                    logger.warning("Story quality too low (%d/%d). Posting feedback to ADO.", quality_score, 10)
+                    quality_msg = self._build_quality_feedback(work_item, analysis, quality_score)
+                    self._write_back_comment(work_item.id, zendesk_ticket_id, quality_msg)
+                    event_bus.emit(PipelineEvent("analyze", "fail",
+                        f"Story quality too low ({quality_score}/10) — posted feedback to ADO", {
+                            "quality_score": quality_score,
+                        }))
+                    self._emit_alert("warning", f"Story #{work_item.id} skipped: quality {quality_score}/10")
+                    self._transition_state(work_item.id, self.state_on_no_code)
+                    results.append(PipelineResult(Stage.ANALYZE, False, error=f"Story quality {quality_score}/10 (min: {self.min_story_quality})"))
+                    return results
+
+                if not analysis.requires_code_change:
+                    # No code change needed — summarize findings and complete.
+                    logger.info("AI determined no code change is required. Writing summary and completing.")
+                    event_bus.emit(PipelineEvent("complete", "pass",
+                                                 f"No code change needed — analysis posted to #{work_item.id}", {
+                                                     "work_item_id": work_item.id,
+                                                     "requires_code_change": False,
+                                                     "recommendation": analysis.recommendation,
+                                                 }))
+                    event_bus.emit(PipelineEvent("alert", "pass",
+                                                 f"Story #{work_item.id}: No code change required. Recommendation posted to ticket.",
+                                                 {"type": "info"}))
+                    # Transition state → Evaluation (no code change).
+                    self._transition_state(work_item.id, self.state_on_no_code)
+
+                    results.append(PipelineResult(Stage.COMPLETE, True, details={
+                        "work_item_id": work_item.id,
+                        "requires_code_change": False,
+                    }))
+                    save_run_record(self.config, {
+                        "work_item_id": work_item.id,
+                        "failed_stage": None,
+                        "requires_code_change": False,
+                        "analysis_summary": analysis.summary[:300],
+                    })
+                    return results
 
         # --- Stage 3: Create branch (code change path) ---
         event_bus.emit(PipelineEvent("create_branch", "running", "Creating feature branch..."))
         logger.info("=== Stage 3: Create Branch ===")
         try:
             existing_branch = self.git.has_feature_branch(work_item.id, work_item.title)
+
+            # Auto-detect failed previous run and start fresh.
+            if existing_branch and not fresh:
+                prev_runs = load_runs_for_story(work_item.id)
+                if prev_runs:
+                    last_run = prev_runs[-1]
+                    if last_run.get("success") == 0:  # SQLite stores bool as 0/1
+                        if self.trust_level == "full-auto":
+                            logger.info("Previous run failed. Trust=full-auto: auto-discarding old branch.")
+                            fresh = True
+                        else:
+                            logger.warning("Previous run for #%s failed. Use --fresh to discard and retry clean.", work_item.id)
+
+            if existing_branch and fresh:
+                logger.info("--fresh: deleting old branch %s and starting clean.", existing_branch)
+                self.git.ensure_base_branch()
+                self.git._run("branch", "-D", existing_branch)
+                existing_branch = None
+
             if existing_branch:
                 logger.info("Resuming on existing branch: %s", existing_branch)
                 event_bus.emit(PipelineEvent("create_branch", "running", f"Reusing existing branch: {existing_branch}"))
@@ -253,6 +322,20 @@ class Pipeline:
             return results
 
         # --- Stage 4: Implement ---
+        # Build full_context early so it's available for fix loop regardless of resume path.
+        history_ctx = build_history_context(self.config, work_item.id)
+        full_context = story_context
+        if history_ctx:
+            full_context = story_context + "\n\n" + history_ctx
+            logger.info("Including history from %d previous run(s).", history_ctx.count("### Run"))
+
+        # Capture lint baseline BEFORE implementation. This lets the fix loop
+        # distinguish pre-existing errors from ones the AI introduced.
+        lint_baseline = self.test_runner.run_all(changed_files=[])
+        logger.info("Lint baseline captured: %s",
+                     "all passing" if lint_baseline.all_passed
+                     else ", ".join(r.tool for r in lint_baseline.results if not r.passed))
+
         # Skip implementation if there are already changes on this branch (resume scenario).
         existing_changes = self.git.get_changed_files()
         if existing_changes:
@@ -268,11 +351,6 @@ class Pipeline:
         else:
             event_bus.emit(PipelineEvent("implement", "running", f"AI implementing via {self.implementer.provider}..."))
             logger.info("=== Stage 4: Implement ===")
-            history_ctx = build_history_context(self.config, work_item.id)
-            full_context = story_context
-            if history_ctx:
-                full_context = story_context + "\n\n" + history_ctx
-                logger.info("Including history from %d previous run(s).", history_ctx.count("### Run"))
             impl_result = self.implementer.implement(full_context)
 
             # --- Plan-review flow: if a plan is returned, get approval before applying ---
@@ -349,8 +427,44 @@ class Pipeline:
             "output_preview": impl_result.get("output", "")[:500],
         }))
         logger.info("Implementation done via: %s", impl_result["method"])
+        tlog.section("Implementation Result")
+        tlog.kv("Method", impl_result.get("method", ""))
+        tlog.kv("Success", str(impl_result.get("success", False)))
+        tlog.write(impl_result.get("output", "")[:5000])
 
-        # Commit changes.
+        # Commit changes (skipped if --skip-git-add).
+        if skip_git_add:
+            changed = self.git.get_changed_files()
+            logger.info("--skip-git-add: %d file(s) written but NOT staged/committed. Review with 'git diff'.", len(changed) if changed else 0)
+            event_bus.emit(PipelineEvent("commit", "skipped",
+                f"Skipped — {len(changed) if changed else 0} file(s) written, not committed (--skip-git-add)", {
+                    "files": changed[:20] if changed else [],
+                }))
+            tlog.section("Git Add/Commit Skipped (--skip-git-add)")
+            tlog.kv("Changed files", str(changed) if changed else "None")
+            results.append(PipelineResult(Stage.COMPLETE, True, details={
+                "branch": branch_name,
+                "work_item_id": work_item.id,
+                "skip_git_add": True,
+                "files_written": changed or [],
+            }))
+            event_bus.emit(PipelineEvent("complete", "pass",
+                f"Files written — review with 'git diff' then commit manually", {
+                    "branch": branch_name,
+                    "skip_git_add": True,
+                }))
+            tlog.section("Pipeline Complete (skip-git-add)")
+            tlog.kv("Branch", branch_name)
+            tlog.close()
+            save_run_record(self.config, {
+                "work_item_id": work_item.id,
+                "failed_stage": None,
+                "method": impl_result.get("method", ""),
+                "ai_output": impl_result.get("output", "")[:300],
+                "branch": branch_name,
+            })
+            return results
+
         event_bus.emit(PipelineEvent("commit", "running", "Committing changes..."))
         changed = self.git.get_changed_files()
         if changed:
@@ -367,7 +481,9 @@ class Pipeline:
             event_bus.emit(PipelineEvent("test", "running", "Running tests..."))
             logger.info("=== Stage 5: Test ===")
 
-            test_summary = self.test_runner.run_all(changed_files=changed if changed else None)
+            raw_summary = self.test_runner.run_all(changed_files=changed if changed else None)
+            # Filter out pre-existing lint errors so the fix loop doesn't chase them.
+            test_summary = raw_summary.new_errors_only(lint_baseline)
 
             # --- Iterative fix loop: retry up to max_fix_attempts ---
             attempt = 1
@@ -378,25 +494,37 @@ class Pipeline:
                     f"Fix attempt {attempt}/{self.max_fix_attempts} — feeding errors back to AI..."))
 
                 # Step 1: Try auto-fixing lint errors first (deterministic, no AI cost).
-                auto_fixed = self.test_runner.auto_fix_lint()
+                auto_fixed = self.test_runner.auto_fix_lint(changed_files=changed)
                 if auto_fixed:
                     logger.info("Auto-lint-fix applied changes for: %s", ", ".join(auto_fixed))
                     changed = self.git.get_changed_files()
                     if changed:
                         self.git.commit_changes(work_item.id, f"Auto-fix lint (attempt {attempt})")
                     # Re-run tests after auto-fix.
-                    test_summary = self.test_runner.run_all(changed_files=changed if changed else None)
+                    raw_summary = self.test_runner.run_all(changed_files=changed if changed else None)
+                    test_summary = raw_summary.new_errors_only(lint_baseline)
                     if test_summary.all_passed:
                         logger.info("Tests pass after auto-lint-fix.")
                         break
 
                 # Step 2: Feed test errors back to AI for a fix attempt.
+                # Use a slim context to stay within token limits (e.g. GitHub Models 8K).
+                # The AI doesn't need the full story to fix lint — just the errors,
+                # the changed file paths, and a brief reminder of the story.
+                # Include module_path so tool-use can resolve file reads.
+                changed_list = "\n".join(f"- {f}" for f in (changed or []))
                 fix_context = (
-                    f"{full_context}\n\n"
+                    f"## Story\n\n"
+                    f"**#{work_item.id}** — {work_item.title}\n\n"
+                    f"## Development Notes\n\n"
+                    f"- Module path: {self.implementer.module_path}\n"
+                    f"- Workspace: {self.workspace}\n\n"
+                    f"## Changed Files\n\n{changed_list}\n\n"
                     f"## Test Failures (Attempt {attempt}/{self.max_fix_attempts})\n\n"
                     f"{test_summary.summary_text()}\n\n"
-                    f"Fix the code to resolve these test/lint failures. "
-                    f"Do not re-introduce previously fixed issues."
+                    f"Fix ONLY the errors listed above. These are NEW errors introduced "
+                    f"by your changes — pre-existing errors have already been filtered out. "
+                    f"Do NOT try to fix other parts of the codebase."
                 )
                 fix_result = self.implementer.implement(fix_context)
                 if fix_result.get("success"):
@@ -415,7 +543,8 @@ class Pipeline:
                     changed = self.git.get_changed_files()
                     if changed:
                         self.git.commit_changes(work_item.id, f"Fix attempt {attempt}")
-                    test_summary = self.test_runner.run_all(changed_files=changed if changed else None)
+                    raw_summary = self.test_runner.run_all(changed_files=changed if changed else None)
+                    test_summary = raw_summary.new_errors_only(lint_baseline)
                 else:
                     logger.warning("Fix attempt %d: AI implementation failed.", attempt)
                     break
@@ -449,14 +578,19 @@ class Pipeline:
         logger.info("=== Stage 6: Review ===")
         diff = self.git.get_diff()
         review = self.reviewer.review(diff, story_context)
-        results.append(PipelineResult(Stage.REVIEW, review["verdict"] == "APPROVE", details=review))
-        review_status = "pass" if review["verdict"] == "APPROVE" else "fail"
+        # APPROVE and COMMENT are both passing verdicts; only REQUEST_CHANGES / ERROR fail.
+        review_passed = review["verdict"] in ("APPROVE", "COMMENT")
+        results.append(PipelineResult(Stage.REVIEW, review_passed, details=review))
+        review_status = "pass" if review_passed else "fail"
         event_bus.emit(PipelineEvent("review", review_status,
                                      f"Verdict: {review['verdict']}", {
                                          "verdict": review["verdict"],
                                          "summary": review.get("summary", "")[:500],
                                      }))
         logger.info("Review verdict: %s", review["verdict"])
+        tlog.section("Code Review")
+        tlog.kv("Verdict", review.get("verdict", ""))
+        tlog.write(review.get("summary", "")[:3000])
 
         # Write final results back to tickets.
         final_comment = self._build_completion_comment(
@@ -529,6 +663,10 @@ class Pipeline:
         }))
         self._emit_alert("success", f"Pipeline complete for #{work_item.id} — branch: {branch_name}")
         logger.info("=== Pipeline complete for #%s ===", work_item.id)
+        tlog.section("Pipeline Complete")
+        tlog.kv("Branch", branch_name)
+        tlog.kv("PR URL", pr_url or "N/A")
+        tlog.close()
 
         save_run_record(self.config, {
             "work_item_id": work_item.id,

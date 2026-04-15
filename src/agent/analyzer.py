@@ -63,6 +63,23 @@ class StoryAnalyzer:
         self.model = ai.get("model", "gpt-4o")
         self.max_tokens = ai.get("max_tokens", 4096)
         self.temperature = ai.get("temperature", 0.2)
+        self.story_id: int | None = None  # Set by pipeline before calling analyze()
+
+    def _record_usage(self, response, stage: str) -> None:
+        """Record token usage from an API response."""
+        try:
+            from src.history import save_token_usage
+            usage = getattr(response, "usage", None)
+            if not usage:
+                return
+            prompt = getattr(usage, "prompt_tokens", 0) or getattr(usage, "input_tokens", 0) or 0
+            completion = getattr(usage, "completion_tokens", 0) or getattr(usage, "output_tokens", 0) or 0
+            save_token_usage(
+                story_id=self.story_id, stage=stage, provider=self.provider,
+                model=self.model, prompt_tokens=prompt, completion_tokens=completion,
+            )
+        except Exception as e:
+            logger.debug("Failed to record token usage: %s", e)
 
     def analyze(self, story_context: str, module_summary: str = "") -> AnalysisResult:
         """Analyze a story and return structured findings."""
@@ -74,6 +91,16 @@ class StoryAnalyzer:
         user_prompt += "\nAnalyze this story and respond with the JSON output."
 
         logger.info("Analyzing story via %s/%s...", self.provider, self.model)
+
+        # Fail fast if we're in a rate limit cooldown.
+        from src.utils.rate_limit import check_cooldown
+        cooldown_msg = check_cooldown(self.provider)
+        if cooldown_msg:
+            logger.warning("Skipping analysis: %s", cooldown_msg.split('\n')[0])
+            return AnalysisResult(
+                summary=f"Analysis failed: {cooldown_msg.split(chr(10))[0]}",
+                raw_response=cooldown_msg,
+            )
 
         try:
             response = self._call_ai(system_prompt, user_prompt)
@@ -94,13 +121,19 @@ class StoryAnalyzer:
             import anthropic
 
             anth = anthropic.Anthropic()
-            msg = anth.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                temperature=self.temperature,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_prompt}],
-            )
+            try:
+                msg = anth.messages.create(
+                    model=self.model,
+                    max_tokens=self.max_tokens,
+                    temperature=self.temperature,
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": user_prompt}],
+                )
+            except anthropic.RateLimitError as e:
+                from ..utils.rate_limit import record_rate_limit
+                record_rate_limit("anthropic", e)
+                raise
+            self._record_usage(msg, "analyze")
             return msg.content[0].text
 
         if self.provider == "copilot":
@@ -119,7 +152,7 @@ class StoryAnalyzer:
         import time
 
         last_error = None
-        max_attempts = 3 if self.provider == "copilot" else 1
+        max_attempts = 1  # Fail fast — analysis is non-blocking in the pipeline.
         for attempt in range(max_attempts):
             try:
                 resp = client.chat.completions.create(
@@ -131,10 +164,11 @@ class StoryAnalyzer:
                         {"role": "user", "content": user_prompt},
                     ],
                 )
+                self._record_usage(resp, "analyze")
                 return resp.choices[0].message.content
             except (openai.RateLimitError, openai.APIConnectionError, openai.APITimeoutError) as e:
                 last_error = e
-                wait = 2 ** (attempt + 1)
+                wait = [5, 20, 60][attempt]
                 logger.warning("Analysis API attempt %d failed (%s), retrying in %ds...", attempt + 1, type(e).__name__, wait)
                 time.sleep(wait)
             except openai.AuthenticationError:
@@ -142,6 +176,13 @@ class StoryAnalyzer:
                     "GitHub token rejected by Models API. Run `gh auth login` or check GITHUB_TOKEN."
                 )
 
+        if isinstance(last_error, openai.RateLimitError):
+            from src.utils.rate_limit import record_rate_limit
+            record_rate_limit(self.provider, last_error)
+            raise RuntimeError(
+                "\u23f3 Rate limit reached \u2014 analysis skipped. "
+                "Use --skip-analysis to avoid this delay."
+            )
         raise RuntimeError(f"Analysis API failed after {max_attempts} attempts: {last_error}")
 
     def _parse_response(self, response: str) -> AnalysisResult:

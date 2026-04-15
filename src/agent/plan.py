@@ -141,12 +141,21 @@ def parse_plan_response(response_text: str) -> ImplementationPlan:
 
     file_changes = []
     for fc_data in data.get("file_changes", []):
+        action = fc_data.get("action", "modify")
+        merge_strategy = fc_data.get("merge_strategy", "append")
+
+        # Normalize: AI sometimes returns action='append' when it means
+        # action='modify' with merge_strategy='append'.
+        if action == "append":
+            action = "modify"
+            merge_strategy = "append"
+
         file_changes.append(FileChange(
             path=fc_data.get("path", ""),
-            action=fc_data.get("action", "modify"),
+            action=action,
             description=fc_data.get("description", ""),
             content=fc_data.get("content", ""),
-            merge_strategy=fc_data.get("merge_strategy", "append"),
+            merge_strategy=merge_strategy,
         ))
 
     # Validate merge strategies.

@@ -63,6 +63,23 @@ class AIReviewer:
         if trust_level in ("balanced", "autonomous", "full-auto"):
             self.require_consent = False
         self._system_prompt = _build_review_prompt(config)
+        self.story_id: int | None = None  # Set by pipeline before calling review()
+
+    def _record_usage(self, response, stage: str) -> None:
+        """Record token usage from an API response."""
+        try:
+            from src.history import save_token_usage
+            usage = getattr(response, "usage", None)
+            if not usage:
+                return
+            prompt = getattr(usage, "prompt_tokens", 0) or getattr(usage, "input_tokens", 0) or 0
+            completion = getattr(usage, "completion_tokens", 0) or getattr(usage, "output_tokens", 0) or 0
+            save_token_usage(
+                story_id=self.story_id, stage=stage, provider=self.provider,
+                model=self.model, prompt_tokens=prompt, completion_tokens=completion,
+            )
+        except Exception as e:
+            logger.debug("Failed to record token usage: %s", e)
 
     def review(self, diff: str, story_context: str) -> dict:
         """Review a diff against story context.
@@ -70,6 +87,16 @@ class AIReviewer:
         Returns:
             dict with keys: verdict (str), findings (str), summary (str)
         """
+        # Fail fast if we're in a rate limit cooldown.
+        from src.utils.rate_limit import check_cooldown
+        cooldown_msg = check_cooldown(self.provider)
+        if cooldown_msg:
+            return {
+                "verdict": "COMMENT",
+                "findings": cooldown_msg,
+                "summary": "Review skipped — API quota exceeded.",
+            }
+
         if not diff.strip():
             return {
                 "verdict": "COMMENT",
@@ -125,13 +152,19 @@ class AIReviewer:
 
     def _call_anthropic(self, prompt: str) -> str:
         client = anthropic.Anthropic()
-        msg = client.messages.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            temperature=0.1,
-            system=self._system_prompt,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        try:
+            msg = client.messages.create(
+                model=self.model,
+                max_tokens=self.max_tokens,
+                temperature=0.1,
+                system=self._system_prompt,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        except anthropic.RateLimitError as e:
+            from ..utils.rate_limit import record_rate_limit
+            record_rate_limit("anthropic", e)
+            raise
+        self._record_usage(msg, "review")
         return msg.content[0].text
 
     def _call_openai(self, prompt: str) -> str:
@@ -145,6 +178,7 @@ class AIReviewer:
                 {"role": "user", "content": prompt},
             ],
         )
+        self._record_usage(resp, "review")
         return resp.choices[0].message.content
 
     def _call_copilot(self, prompt: str) -> str:
@@ -174,10 +208,11 @@ class AIReviewer:
                         {"role": "user", "content": prompt},
                     ],
                 )
+                self._record_usage(resp, "review")
                 return resp.choices[0].message.content
             except (openai.RateLimitError, openai.APIConnectionError, openai.APITimeoutError) as e:
                 last_error = e
-                wait = 2 ** (attempt + 1)
+                wait = [5, 20, 60][attempt]
                 logger.warning("Copilot review API attempt %d failed (%s), retrying in %ds...", attempt + 1, type(e).__name__, wait)
                 time.sleep(wait)
             except openai.AuthenticationError:
@@ -185,6 +220,13 @@ class AIReviewer:
                     "GitHub token rejected by Models API. Run `gh auth login` or check GITHUB_TOKEN."
                 )
 
+        if isinstance(last_error, openai.RateLimitError):
+            from src.utils.rate_limit import record_rate_limit
+            record_rate_limit("copilot", last_error)
+            raise RuntimeError(
+                "⏳ GitHub Models API rate limit reached during review. "
+                "Review will be skipped. Wait a few minutes or use a paid API key."
+            )
         raise RuntimeError(f"Copilot review API failed after 3 attempts: {last_error}")
 
     @staticmethod

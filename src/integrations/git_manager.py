@@ -17,6 +17,8 @@ class GitManager:
         self.workspace_dir = Path(config["project"]["workspace_dir"])
         self.base_branch = config["project"].get("base_branch", "master")
         self.branch_prefix = config["project"].get("branch_prefix", "feature")
+        # Separator between prefix and ID: "/" (git standard) or "-" (Pantheon-safe).
+        self.branch_separator = config["project"].get("branch_separator", "/")
         git_config = config.get("git", {})
         self.auto_commit = git_config.get("auto_commit", True)
         self.auto_push = git_config.get("auto_push", False)
@@ -93,7 +95,7 @@ class GitManager:
         slug = title.lower()
         slug = re.sub(r"[^a-z0-9]+", "-", slug)
         slug = re.sub(r"-+", "-", slug).strip("-")[:60]
-        branch_name = f"{self.branch_prefix}/{work_item_id}-{slug}"
+        branch_name = f"{self.branch_prefix}{self.branch_separator}{work_item_id}-{slug}"
 
         # Check if branch already exists locally.
         existing = self._run("branch", "--list", branch_name)
@@ -141,7 +143,7 @@ class GitManager:
         slug = title.lower()
         slug = re.sub(r"[^a-z0-9]+", "-", slug)
         slug = re.sub(r"-+", "-", slug).strip("-")[:60]
-        branch_name = f"{self.branch_prefix}/{work_item_id}-{slug}"
+        branch_name = f"{self.branch_prefix}{self.branch_separator}{work_item_id}-{slug}"
         existing = self._run("branch", "--list", branch_name)
         return branch_name if existing.strip() else None
 

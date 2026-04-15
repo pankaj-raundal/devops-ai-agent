@@ -49,26 +49,32 @@ def fetch(ctx):
 @main.command()
 @click.option("--story-id", "-s", type=int, default=None, help="Specific work item ID")
 @click.option("--skip-tests", is_flag=True, help="Skip test execution")
+@click.option("--skip-analysis", is_flag=True, help="Skip AI analysis stage (saves API quota)")
 @click.option("--dry-run", is_flag=True, help="Fetch story and build context only — no branch, AI, or tests")
+@click.option("--fresh", is_flag=True, help="Discard previous branch and start clean")
+@click.option("--ci", is_flag=True, help="CI mode: suppress all interactive prompts, auto-approve plan and push")
+@click.option("--skip-git-add", is_flag=True, help="Skip git add/commit/push — AI writes files but does not stage or commit them. You can review and commit manually.")
 @click.pass_context
-def run(ctx, story_id, skip_tests, dry_run):
+def run(ctx, story_id, skip_tests, skip_analysis, dry_run, fresh, ci, skip_git_add):
     """Run the full pipeline: Fetch → Branch → Implement → Test → Review."""
     from .pipeline import Pipeline
+    from .utils.progress import PipelineProgress
 
-    pipeline = Pipeline(ctx.obj["config"])
-    results = pipeline.run(work_item_id=story_id, skip_tests=skip_tests, dry_run=dry_run)
+    pipeline = Pipeline(ctx.obj["config"], ci_mode=ci)
 
-    table = Table(title="Pipeline Results")
-    table.add_column("Stage", style="cyan")
-    table.add_column("Status")
-    table.add_column("Details")
+    with PipelineProgress(console=console) as progress:
+        results = pipeline.run(
+            work_item_id=story_id,
+            skip_tests=skip_tests,
+            skip_analysis=skip_analysis,
+            dry_run=dry_run,
+            fresh=fresh,
+            skip_git_add=skip_git_add,
+        )
 
-    for r in results:
-        status = "[green]PASS[/]" if r.success else "[red]FAIL[/]"
-        detail = r.details.get("title", "") or r.details.get("branch", "") or r.details.get("method", "") or r.details.get("verdict", "") or r.error
-        table.add_row(r.stage.value, status, str(detail)[:80])
-
-    console.print(table)
+    # Print the final summary table.
+    console.print()
+    console.print(progress.final_table())
 
     if not all(r.success for r in results):
         sys.exit(1)
@@ -345,6 +351,92 @@ def dashboard(ctx, port):
     console.print(f"[bold green]Dashboard running at http://localhost:{port}[/]")
     console.print("Press Ctrl+C to stop.")
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
+
+
+@main.command()
+@click.option("--story-id", "-s", type=int, default=None, help="Show usage for a specific story")
+@click.option("--days", "-d", type=int, default=7, help="Number of days to summarize (default: 7)")
+@click.pass_context
+def usage(ctx, story_id, days):
+    """Show token usage statistics."""
+    from .history import get_usage_by_story, get_usage_summary
+
+    if story_id:
+        data = get_usage_by_story(story_id)
+        if not data["calls"]:
+            console.print(f"[yellow]No token usage recorded for story #{story_id}.[/]")
+            return
+
+        console.print(f"[bold]Token Usage — Story #{story_id}[/]")
+        console.print(f"  Total: {data['total_tokens']:,} tokens ({data['prompt_tokens']:,} prompt + {data['completion_tokens']:,} completion)")
+        console.print(f"  API calls: {data['calls']}\n")
+
+        table = Table(title="Breakdown")
+        table.add_column("Stage", style="cyan")
+        table.add_column("Provider")
+        table.add_column("Model")
+        table.add_column("Prompt", justify="right")
+        table.add_column("Completion", justify="right")
+        table.add_column("Total", justify="right")
+        table.add_column("Time", style="dim")
+
+        for r in data["breakdown"]:
+            table.add_row(
+                r["stage"], r["provider"], r["model"],
+                f"{r['prompt_tokens']:,}", f"{r['completion_tokens']:,}",
+                f"{r['total_tokens']:,}", r["timestamp"][:19],
+            )
+        console.print(table)
+    else:
+        data = get_usage_summary(days=days)
+        if not data["daily"]:
+            console.print(f"[yellow]No token usage recorded in the last {days} day(s).[/]")
+            return
+
+        console.print(f"[bold]Token Usage Summary — Last {days} Day(s)[/]")
+        console.print(f"  Grand total: {data['grand_total_tokens']:,} tokens\n")
+
+        # Daily table.
+        daily_table = Table(title="Daily Totals")
+        daily_table.add_column("Date", style="cyan")
+        daily_table.add_column("Prompt", justify="right")
+        daily_table.add_column("Completion", justify="right")
+        daily_table.add_column("Total", justify="right")
+        daily_table.add_column("Calls", justify="right")
+
+        for r in data["daily"]:
+            daily_table.add_row(
+                r["day"], f"{r['prompt']:,}", f"{r['completion']:,}",
+                f"{r['total']:,}", str(r["calls"]),
+            )
+        console.print(daily_table)
+
+        # Per-story table.
+        if data["by_story"]:
+            story_table = Table(title="\nBy Story")
+            story_table.add_column("Story", style="cyan")
+            story_table.add_column("Total Tokens", justify="right")
+            story_table.add_column("Calls", justify="right")
+
+            for r in data["by_story"]:
+                story_table.add_row(
+                    f"#{r['story_id']}", f"{r['total']:,}", str(r["calls"]),
+                )
+            console.print(story_table)
+
+        # Per-provider table.
+        if data["by_provider"]:
+            prov_table = Table(title="\nBy Provider")
+            prov_table.add_column("Provider", style="cyan")
+            prov_table.add_column("Model")
+            prov_table.add_column("Total Tokens", justify="right")
+            prov_table.add_column("Calls", justify="right")
+
+            for r in data["by_provider"]:
+                prov_table.add_row(
+                    r["provider"], r["model"], f"{r['total']:,}", str(r["calls"]),
+                )
+            console.print(prov_table)
 
 
 if __name__ == "__main__":

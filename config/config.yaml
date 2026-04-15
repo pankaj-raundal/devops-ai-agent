@@ -12,6 +12,8 @@ project:
   framework: "drupal"          # Framework profile: drupal, python, react, java, dotnet, angular
   base_branch: "master"        # Branch to create feature branches from
   branch_prefix: "feature"     # Prefix for feature branches
+  # Branch name separator: "/" (standard git) or "-" (for Pantheon/hosts that reject slashes).
+  branch_separator: "-"
 
 # --- Azure DevOps ---
 azure_devops:
@@ -60,9 +62,21 @@ ai_agent:
   # Trust levels control how many manual gates are active:
   #   "cautious"    — all gates: consent + plan approval + push confirmation (default)
   #   "balanced"    — skip consent, keep plan + push approval
-  #   "autonomous"  — skip consent + plan, keep push confirmation only
+  #   "autonomous"  — skip consent + plan approval, keep push confirmation only
   #   "full-auto"   — no gates, fully unattended (for CI/CD or overnight batch runs)
+  #
+  # For full automation with Claude (agentic mode):
+  #   set approval_mode: "auto" + trust_level: "full-auto"
+  #   Claude will read → write → test → self-correct without any human gates.
   trust_level: "cautious"
+  # CLI-only mode: only use Claude Code CLI for implementation, never fall
+  # through to expensive API calls. When CLI hits rate limits, wait patiently
+  # with exponential backoff instead of burning API tokens on fallback paths.
+  # Recommended for Claude Team/Max subscriptions.
+  cli_only: false
+  # CLI retry settings (active when cli_only=true or CLI hits rate limits).
+  max_cli_retries: 3             # Retries on 429 (cli_only=true uses this; otherwise 3)
+  cli_retry_base_wait: 60        # Base wait in seconds (doubles each retry: 60, 120, 240...)
   # Iterative fix loop: when tests fail, feed errors back to AI for auto-fix attempts.
   max_fix_attempts: 3          # Max test→fix→retest cycles (1 = no retry, just fail)
   # Story quality gate: minimum quality score (1-10) before AI implementation proceeds.
@@ -71,8 +85,17 @@ ai_agent:
   #   anthropic → ANTHROPIC_API_KEY
   #   openai   → OPENAI_API_KEY
   #   copilot  → GITHUB_TOKEN (uses GitHub Models API with OpenAI-compatible endpoint)
-  max_tokens: 8192
+  max_tokens: 16384            # Claude Sonnet supports up to 64k output; 16k covers large file rewrites
   temperature: 0.2
+  # Prompt size limit — tune to your Anthropic API tier (controls how much story context is sent):
+  #   Free / Build tier :  10k TPM  → keep at 6000 (default)
+  #   Tier 1 (spend $5+):  50k TPM  → raise to 30000
+  #   Tier 2 (spend $25+): 100k TPM → raise to 80000
+  # Add a small amount to your account at console.anthropic.com to upgrade tiers.
+  max_prompt_chars: 6000
+  # Max tool-use turns per AI session (each turn carries full conversation history).
+  # Free tier (10k TPM): keep at 6. Tier 1 (50k TPM): raise to 15.
+  max_tooluse_turns: 6
   context_files:               # Files to include as context for the AI agent
     - ".current-story.md"
   system_prompt_template: "templates/implement.md"

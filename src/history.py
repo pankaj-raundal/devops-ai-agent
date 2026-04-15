@@ -67,6 +67,24 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_feedback_run
             ON feedback(run_id);
+
+        CREATE TABLE IF NOT EXISTS token_usage (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            story_id          INTEGER,            -- work item ID (NULL for non-story calls)
+            stage             TEXT    NOT NULL,    -- analyze, implement, fix-N, review
+            provider          TEXT    NOT NULL,    -- copilot, anthropic, openai
+            model             TEXT    DEFAULT '',
+            prompt_tokens     INTEGER DEFAULT 0,
+            completion_tokens INTEGER DEFAULT 0,
+            total_tokens      INTEGER DEFAULT 0,
+            timestamp         TEXT    NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_token_usage_story
+            ON token_usage(story_id);
+
+        CREATE INDEX IF NOT EXISTS idx_token_usage_timestamp
+            ON token_usage(timestamp);
     """)
     conn.commit()
 
@@ -322,3 +340,134 @@ def migrate_from_json(config: dict) -> int:
         logger.info("Migrated %d records from JSON to SQLite.", count)
 
     return count
+
+
+# ── Token usage tracking ──
+
+
+def save_token_usage(
+    *,
+    story_id: int | None,
+    stage: str,
+    provider: str,
+    model: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+) -> None:
+    """Record token usage for a single API call."""
+    total = prompt_tokens + completion_tokens
+    conn = _get_connection()
+    try:
+        conn.execute(
+            """INSERT INTO token_usage
+               (story_id, stage, provider, model, prompt_tokens, completion_tokens, total_tokens, timestamp)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                story_id,
+                stage,
+                provider,
+                model,
+                prompt_tokens,
+                completion_tokens,
+                total,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        conn.commit()
+        logger.debug("Token usage: story=%s stage=%s tokens=%d (%d+%d)",
+                      story_id, stage, total, prompt_tokens, completion_tokens)
+    finally:
+        conn.close()
+
+
+def get_usage_by_story(story_id: int) -> dict:
+    """Get token usage summary for a specific story.
+
+    Returns dict with 'total_tokens', 'prompt_tokens', 'completion_tokens',
+    'calls' (count), and 'breakdown' (list of per-stage dicts).
+    """
+    conn = _get_connection()
+    try:
+        rows = conn.execute(
+            """SELECT stage, provider, model, prompt_tokens, completion_tokens,
+                      total_tokens, timestamp
+               FROM token_usage WHERE story_id = ? ORDER BY timestamp""",
+            (story_id,),
+        ).fetchall()
+
+        total_prompt = sum(r["prompt_tokens"] for r in rows)
+        total_completion = sum(r["completion_tokens"] for r in rows)
+        total_total = sum(r["total_tokens"] for r in rows)
+
+        breakdown = [dict(r) for r in rows]
+
+        return {
+            "story_id": story_id,
+            "total_tokens": total_total,
+            "prompt_tokens": total_prompt,
+            "completion_tokens": total_completion,
+            "calls": len(rows),
+            "breakdown": breakdown,
+        }
+    finally:
+        conn.close()
+
+
+def get_usage_summary(days: int = 7) -> dict:
+    """Get aggregate token usage for the last N days.
+
+    Returns dict with daily totals, per-story totals, and grand totals.
+    """
+    conn = _get_connection()
+    try:
+        cutoff = datetime.now(timezone.utc).isoformat()[:10]  # today
+        # Calculate cutoff date.
+        from datetime import timedelta
+        cutoff_dt = datetime.now(timezone.utc) - timedelta(days=days)
+        cutoff = cutoff_dt.isoformat()
+
+        # Per-day totals.
+        daily_rows = conn.execute(
+            """SELECT DATE(timestamp) as day,
+                      SUM(prompt_tokens) as prompt,
+                      SUM(completion_tokens) as completion,
+                      SUM(total_tokens) as total,
+                      COUNT(*) as calls
+               FROM token_usage WHERE timestamp >= ?
+               GROUP BY DATE(timestamp) ORDER BY day""",
+            (cutoff,),
+        ).fetchall()
+
+        # Per-story totals.
+        story_rows = conn.execute(
+            """SELECT story_id,
+                      SUM(prompt_tokens) as prompt,
+                      SUM(completion_tokens) as completion,
+                      SUM(total_tokens) as total,
+                      COUNT(*) as calls
+               FROM token_usage WHERE timestamp >= ? AND story_id IS NOT NULL
+               GROUP BY story_id ORDER BY total DESC""",
+            (cutoff,),
+        ).fetchall()
+
+        # Per-provider totals.
+        provider_rows = conn.execute(
+            """SELECT provider, model,
+                      SUM(total_tokens) as total,
+                      COUNT(*) as calls
+               FROM token_usage WHERE timestamp >= ?
+               GROUP BY provider, model ORDER BY total DESC""",
+            (cutoff,),
+        ).fetchall()
+
+        grand_total = sum(r["total"] for r in daily_rows)
+
+        return {
+            "days": days,
+            "grand_total_tokens": grand_total,
+            "daily": [dict(r) for r in daily_rows],
+            "by_story": [dict(r) for r in story_rows],
+            "by_provider": [dict(r) for r in provider_rows],
+        }
+    finally:
+        conn.close()

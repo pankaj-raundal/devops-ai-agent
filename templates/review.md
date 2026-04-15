@@ -15,7 +15,7 @@ You are a senior developer performing a thorough code review.
 - Input validation at boundaries
 
 ### Code Quality
-- Follows project coding standards ({coding_standard})
+- Follows project coding standards
 - Clean, readable code
 - Proper error handling
 - No dead code or debugging artifacts

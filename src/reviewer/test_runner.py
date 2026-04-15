@@ -41,6 +41,52 @@ class TestSummary:
                 lines.append(truncated)
         return "\n".join(lines)
 
+    def new_errors_only(self, baseline: "TestSummary") -> "TestSummary":
+        """Return a TestSummary containing only errors NOT present in baseline.
+
+        Compares output lines — any line present in the baseline output for the
+        same tool is stripped. This prevents the fix loop from showing the AI
+        pre-existing lint errors it didn't cause.
+        """
+        baseline_outputs: dict[str, set[str]] = {}
+        for r in baseline.results:
+            baseline_outputs[r.tool] = set(r.output.splitlines())
+
+        new_results = []
+        for r in self.results:
+            if r.passed:
+                new_results.append(r)
+                continue
+
+            old_lines = baseline_outputs.get(r.tool, set())
+            if not old_lines:
+                # No baseline for this tool — keep full output.
+                new_results.append(r)
+                continue
+
+            # Keep only lines that weren't in the baseline.
+            new_lines = [
+                line for line in r.output.splitlines()
+                if line not in old_lines
+            ]
+            if new_lines:
+                new_results.append(TestResult(
+                    tool=r.tool,
+                    passed=False,
+                    output="\n".join(new_lines),
+                    returncode=r.returncode,
+                ))
+            else:
+                # All errors were pre-existing — treat as pass.
+                new_results.append(TestResult(
+                    tool=r.tool,
+                    passed=True,
+                    output="All errors are pre-existing (baseline).",
+                    returncode=0,
+                ))
+
+        return TestSummary(results=new_results)
+
 
 class TestRunner:
     """Runs configured test suites for a project."""
@@ -131,8 +177,11 @@ class TestRunner:
 
     def _run_phpunit(self, scoped_files: list[str]) -> TestResult:
         """Run PHPUnit tests (always runs full test suite)."""
-        test_dir = f"{self.module_path}/tests/"
-        cmd = self._cmd("phpunit", "-c", "web/core", test_dir)
+        test_dir = self.workspace_dir / self.module_path / "tests"
+        if not test_dir.exists() or not test_dir.is_dir():
+            logger.info("PHPUnit skipped — no tests/ directory found at %s", test_dir)
+            return TestResult(tool="phpunit", passed=True, output="Skipped — no tests/ directory", returncode=0)
+        cmd = self._cmd("phpunit", "-c", "web/core", f"{self.module_path}/tests/")
         return self._exec("phpunit", cmd)
 
     def _run_phpcs(self, scoped_files: list[str]) -> TestResult:
@@ -143,6 +192,9 @@ class TestRunner:
         )
         if scoped_files:
             cmd = base_cmd + scoped_files
+        elif self.test_scope == "changed":
+            logger.info("phpcs skipped — test_scope=changed but no matching files in changeset.")
+            return TestResult(tool="phpcs", passed=True, output="Skipped — no changed PHP files", returncode=0)
         else:
             cmd = base_cmd + [self.module_path]
         return self._exec("phpcs", cmd)
@@ -152,6 +204,9 @@ class TestRunner:
         base_cmd = self._cmd("phpstan", "analyse")
         if scoped_files:
             cmd = base_cmd + scoped_files + ["--level=2", "--no-progress"]
+        elif self.test_scope == "changed":
+            logger.info("phpstan skipped — test_scope=changed but no matching files in changeset.")
+            return TestResult(tool="phpstan", passed=True, output="Skipped — no changed PHP files", returncode=0)
         else:
             cmd = base_cmd + [self.module_path, "--level=2", "--no-progress"]
         return self._exec("phpstan", cmd)
@@ -176,6 +231,8 @@ class TestRunner:
         base_cmd = self._cmd("ruff", "check")
         if scoped_files:
             cmd = base_cmd + scoped_files
+        elif self.test_scope == "changed":
+            return TestResult(tool="ruff", passed=True, output="Skipped — no changed Python files", returncode=0)
         else:
             cmd = base_cmd + [self.module_path or "."]
         return self._exec("ruff", cmd)
@@ -185,6 +242,8 @@ class TestRunner:
         base_cmd = self._cmd("mypy")
         if scoped_files:
             cmd = base_cmd + scoped_files
+        elif self.test_scope == "changed":
+            return TestResult(tool="mypy", passed=True, output="Skipped — no changed Python files", returncode=0)
         else:
             cmd = base_cmd + [self.module_path or "."]
         return self._exec("mypy", cmd)
@@ -201,6 +260,8 @@ class TestRunner:
         base_cmd = self._cmd("npx", "eslint")
         if scoped_files:
             cmd = base_cmd + scoped_files
+        elif self.test_scope == "changed":
+            return TestResult(tool="eslint", passed=True, output="Skipped — no changed JS/TS files", returncode=0)
         else:
             cmd = base_cmd + [self.module_path or "."]
         return self._exec("eslint", cmd)
@@ -256,16 +317,28 @@ class TestRunner:
         cmd = self._cmd("dotnet", "build", "/warnaserror")
         return self._exec("dotnet_build", cmd)
 
-    def auto_fix_lint(self) -> list[str]:
-        """Run deterministic auto-fixers for lint tools. Returns list of tools that applied fixes."""
+    def auto_fix_lint(self, changed_files: list[str] | None = None) -> list[str]:
+        """Run deterministic auto-fixers for lint tools. Returns list of tools that applied fixes.
+
+        When test_scope='changed' and changed_files is provided, auto-fixers
+        only target the changed files instead of the full module.
+        """
+        # Determine target: scoped changed files or full module.
+        scoped = self._get_scoped_files(changed_files) if self.test_scope == "changed" and changed_files else []
+
+        if self.test_scope == "changed" and changed_files and not scoped:
+            logger.info("auto_fix_lint: no lintable files in changeset — skipping.")
+            return []
+
         target = self.module_path or "."
         fixers: dict[str, list[str]] = {
             "phpcs": self._cmd(
                 "phpcbf", "--standard=Drupal,DrupalPractice",
-                "--extensions=php,module,inc,install,test,profile,theme", target,
+                "--extensions=php,module,inc,install,test,profile,theme",
+                *(scoped if scoped else [target]),
             ),
-            "ruff": self._cmd("ruff", "check", "--fix", target),
-            "eslint": self._cmd("npx", "eslint", "--fix", target),
+            "ruff": self._cmd("ruff", "check", "--fix", *(scoped if scoped else [target])),
+            "eslint": self._cmd("npx", "eslint", "--fix", *(scoped if scoped else [target])),
             "dotnet_format": self._cmd("dotnet", "format", target),
             "checkstyle": self._cmd("mvn", "checkstyle:check", "-q"),
         }
