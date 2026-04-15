@@ -222,6 +222,7 @@ class ImplementationAgent:
         self.module_path = config["project"].get("module_path", "")
         self.story_id: int | None = None  # Set by pipeline before calling implement()
         self.ticket_logger = None  # Set by pipeline — TicketLogger instance for detailed I/O logs.
+        self.analysis_hint: str = ""  # Set by pipeline — summary+approach+affected_areas from analysis stage.
 
     def _record_usage(self, response, stage: str) -> None:
         """Record token usage from an API response (OpenAI or Anthropic format)."""
@@ -432,7 +433,7 @@ class ImplementationAgent:
                 title = line.split("**Title:**")[-1].strip()
                 break
 
-        lean = self._build_lean_prompt(title, story_context, self.module_path)
+        lean = self._build_lean_prompt(title, story_context, self.module_path, self.analysis_hint)
 
         prompt = (
             f"{lean}\n\n"
@@ -1330,12 +1331,16 @@ class ImplementationAgent:
             return f"[ERROR] '{command}' failed: {e}", 0
 
     @staticmethod
-    def _build_lean_prompt(work_item_title: str, story_context: str, module_path: str) -> str:
+    def _build_lean_prompt(work_item_title: str, story_context: str, module_path: str, analysis_hint: str = "") -> str:
         """Build a minimal prompt for Claude Code CLI — just the story essence.
 
         Claude Code CLI already knows how to explore codebases, read files,
         and make surgical edits. We don't need to send file trees, file contents,
         or elaborate instructions. Just the story — like typing in VS Code chat.
+
+        If analysis_hint is provided (from the AI analysis stage), it's appended
+        to guide the CLI toward the right files and approach — especially useful
+        when PMs write vague stories without detailed descriptions.
         """
         # Extract just the description and acceptance criteria from context.
         # Strip the heavy parts (module structure, run history, dev notes).
@@ -1360,6 +1365,8 @@ class ImplementationAgent:
             prompt += f"{description[:1000]}\n\n"
         if acceptance and acceptance != "None specified":
             prompt += f"Acceptance Criteria:\n{acceptance[:500]}\n\n"
+        if analysis_hint:
+            prompt += f"Technical context (from analysis):\n{analysis_hint[:500]}\n\n"
         prompt += (
             "Make minimal, surgical changes. "
             "Read each file before modifying it. "
@@ -1390,8 +1397,9 @@ class ImplementationAgent:
                 title = line.split("**Title:**")[-1].strip()
                 break
 
-        prompt = self._build_lean_prompt(title, story_context, self.module_path)
-        logger.info("Claude Code CLI prompt: %d chars (lean).", len(prompt))
+        prompt = self._build_lean_prompt(title, story_context, self.module_path, self.analysis_hint)
+        logger.info("Claude Code CLI prompt: %d chars (lean%s).", len(prompt),
+                     ", +analysis hint" if self.analysis_hint else "")
 
         if self.ticket_logger:
             self.ticket_logger.section("Claude Code CLI — Lean Prompt")

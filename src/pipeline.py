@@ -188,6 +188,8 @@ class Pipeline:
         # --- Stage 2: AI Analysis (non-blocking) ---
         # Analysis is helpful but not required — if it fails (e.g. rate limit),
         # skip it and proceed to implementation.
+        analysis = None
+        analysis_failed = False
         if skip_analysis:
             logger.info("=== Stage 2: AI Analysis (skipped via --skip-analysis) ===")
             event_bus.emit(PipelineEvent("analyze", "skipped", "Skipped via --skip-analysis"))
@@ -328,6 +330,20 @@ class Pipeline:
         if history_ctx:
             full_context = story_context + "\n\n" + history_ctx
             logger.info("Including history from %d previous run(s).", history_ctx.count("### Run"))
+
+        # Feed analysis insights into the CLI prompt so vague PM stories
+        # still produce targeted implementations (zero extra API cost).
+        if not skip_analysis and analysis and not analysis_failed:
+            parts = []
+            if analysis.summary:
+                parts.append(analysis.summary)
+            if analysis.approach:
+                parts.append(f"Approach: {analysis.approach}")
+            if analysis.affected_areas:
+                parts.append(f"Affected files: {', '.join(analysis.affected_areas)}")
+            if parts:
+                self.implementer.analysis_hint = "\n".join(parts)
+                logger.info("Analysis hint set (%d chars) for CLI prompt.", len(self.implementer.analysis_hint))
 
         # Capture lint baseline BEFORE implementation. This lets the fix loop
         # distinguish pre-existing errors from ones the AI introduced.
