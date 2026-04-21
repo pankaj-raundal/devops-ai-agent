@@ -86,54 +86,65 @@ class StoryAnalyzer:
     def analyze(self, story_context: str, module_summary: str = "") -> AnalysisResult:
         """Analyze a story and return structured findings.
 
-        Strategy: Python heuristic → fetch URLs → Claude CLI (Team plan) → API (fallback).
+        Strategy: fetch URLs → Python heuristic → Claude CLI (Team plan) → API (fallback).
         """
-        # Step 1: Python heuristic — catch obvious non-code stories for free.
+        # Step 1: Fetch URLs referenced in the story (pure Python, free).
+        # Done FIRST so heuristic and Claude CLI both get enriched context.
+        url_context = self._extract_and_fetch_urls(story_context)
+        if url_context:
+            story_context = story_context + "\n\n" + url_context
+            logger.info("Enriched story context with URL content (%d chars added).", len(url_context))
+        else:
+            logger.info("No URL content fetched (0 fetchable URLs or all failed).")
+
+        # Step 2: Python heuristic — catch obvious non-code stories for free.
         heuristic = self._python_heuristic(story_context)
         if heuristic is not None:
             logger.info("Python heuristic resolved analysis — no AI call needed.")
             return heuristic
 
-        # Step 1b: Fetch URLs referenced in the story (pure Python, free).
-        # Enriches the context so Claude CLI gets full background on spikes/research.
-        url_context = self._extract_and_fetch_urls(story_context)
-        if url_context:
-            story_context = story_context + "\n\n" + url_context
-            logger.info("Enriched story context with URL content (%d chars added).", len(url_context))
-
         # Step 2: Claude Code CLI — uses Team plan, zero API cost.
         cli_result = self._try_claude_cli(story_context, module_summary)
         if cli_result is not None:
-            return cli_result
+            result = cli_result
+        else:
+            # Step 3: API fallback — uses ANTHROPIC_API_KEY / OPENAI_API_KEY.
+            logger.info("Falling back to %s API for analysis.", self.provider)
+            system_prompt = self._load_system_prompt()
 
-        # Step 3: API fallback — uses ANTHROPIC_API_KEY / OPENAI_API_KEY.
-        logger.info("Falling back to %s API for analysis.", self.provider)
-        system_prompt = self._load_system_prompt()
+            user_prompt = f"## Story Context\n\n{story_context}\n"
+            if module_summary:
+                user_prompt += f"\n## Module Structure\n\n{module_summary}\n"
+            user_prompt += "\nAnalyze this story and respond with the JSON output."
 
-        user_prompt = f"## Story Context\n\n{story_context}\n"
-        if module_summary:
-            user_prompt += f"\n## Module Structure\n\n{module_summary}\n"
-        user_prompt += "\nAnalyze this story and respond with the JSON output."
+            # Fail fast if we're in a rate limit cooldown.
+            from src.utils.rate_limit import check_cooldown
+            cooldown_msg = check_cooldown(self.provider)
+            if cooldown_msg:
+                logger.warning("Skipping analysis: %s", cooldown_msg.split('\n')[0])
+                return AnalysisResult(
+                    summary=f"Analysis failed: {cooldown_msg.split(chr(10))[0]}",
+                    raw_response=cooldown_msg,
+                )
 
-        # Fail fast if we're in a rate limit cooldown.
-        from src.utils.rate_limit import check_cooldown
-        cooldown_msg = check_cooldown(self.provider)
-        if cooldown_msg:
-            logger.warning("Skipping analysis: %s", cooldown_msg.split('\n')[0])
-            return AnalysisResult(
-                summary=f"Analysis failed: {cooldown_msg.split(chr(10))[0]}",
-                raw_response=cooldown_msg,
-            )
+            try:
+                response = self._call_ai(system_prompt, user_prompt)
+                result = self._parse_response(response)
+            except Exception as e:
+                logger.error("AI analysis failed: %s", e)
+                return AnalysisResult(
+                    summary=f"Analysis failed: {e}",
+                    raw_response=str(e),
+                )
 
-        try:
-            response = self._call_ai(system_prompt, user_prompt)
-            return self._parse_response(response)
-        except Exception as e:
-            logger.error("AI analysis failed: %s", e)
-            return AnalysisResult(
-                summary=f"Analysis failed: {e}",
-                raw_response=str(e),
-            )
+        # Safety net: SPIKE stories never require code changes.
+        if "[spike]" in story_context.lower() and result.requires_code_change:
+            logger.info("SPIKE story detected — overriding requires_code_change to False.")
+            result.requires_code_change = False
+            if not result.recommendation:
+                result.recommendation = "Create implementation stories based on this spike analysis."
+
+        return result
 
     def _python_heuristic(self, story_context: str) -> AnalysisResult | None:
         """Pure Python analysis — catches obvious cases without any AI call.
@@ -239,13 +250,26 @@ class StoryAnalyzer:
     def _fetch_url(self, url: str) -> str:
         """Fetch a single URL and return its text content.
 
-        Tries unauthenticated first. If 401/403 and running interactively,
-        prompts the user for credentials and retries once.
+        Special handling for known platforms:
+        - Confluence/Atlassian Cloud: uses REST API with API token.
+        - Other URLs: tries unauthenticated, prompts for creds on 401/403.
         Returns empty string on failure.
         """
         import sys
 
         import httpx
+
+        # Confluence Cloud wiki pages → use REST API (browser URL returns JS login page).
+        confluence_match = re.match(
+            r'https://([^/]+)\.atlassian\.net/wiki/spaces/([^/]+)/pages/(\d+)',
+            url,
+        )
+        if confluence_match:
+            return self._fetch_confluence_page(
+                domain=confluence_match.group(1),
+                page_id=confluence_match.group(3),
+                original_url=url,
+            )
 
         headers = {
             "User-Agent": "DevOps-AI-Agent/1.0 (story-analyzer)",
@@ -269,7 +293,21 @@ class StoryAnalyzer:
                 logger.warning("URL returned HTTP %d: %s", resp.status_code, url)
                 return ""
 
-            return self._extract_text(resp.text, resp.headers.get("content-type", ""))
+            text = self._extract_text(resp.text, resp.headers.get("content-type", ""))
+
+            # Detect Atlassian/Confluence login walls (200 + JS login page).
+            if "atlassian" in url and ("JavaScript is disabled" in text or "Log in with Atlassian" in text):
+                logger.info("Confluence login wall detected — trying REST API.")
+                # Try to extract domain and page ID from URL.
+                m = re.match(r'https://([^/]+)\.atlassian\.net/wiki/.*?/(\d+)', url)
+                if m:
+                    return self._fetch_confluence_page(m.group(1), m.group(2), url)
+                # Generic auth prompt fallback.
+                if sys.stdin.isatty():
+                    return self._fetch_url_with_credentials(url, headers)
+                return ""
+
+            return text
 
         except httpx.TimeoutException:
             logger.warning("URL fetch timed out (15s): %s", url)
@@ -277,6 +315,70 @@ class StoryAnalyzer:
             logger.warning("URL fetch failed: %s — %s", url, e)
         except Exception as e:
             logger.warning("Unexpected error fetching URL %s: %s", url, e)
+
+        return ""
+
+    def _fetch_confluence_page(self, domain: str, page_id: str, original_url: str) -> str:
+        """Fetch a Confluence Cloud page via REST API.
+
+        Requires an Atlassian API token. Checks config first, then env var,
+        then prompts interactively.
+        """
+        import os
+        import sys
+
+        import httpx
+
+        # Look for credentials: config → env → interactive prompt.
+        confluence_cfg = self.config.get("confluence", {})
+        email = confluence_cfg.get("email") or os.environ.get("CONFLUENCE_EMAIL", "")
+        token = confluence_cfg.get("api_token") or os.environ.get("CONFLUENCE_API_TOKEN", "")
+
+        if not email or not token:
+            if not sys.stdin.isatty():
+                logger.warning("Confluence credentials not configured — skipping %s", original_url)
+                return ""
+
+            from rich.console import Console
+            console = Console()
+            console.print(f"\n[yellow]Confluence page requires authentication:[/] {original_url}")
+            console.print("You need an Atlassian API token (https://id.atlassian.net/manage-profile/security/api-tokens)")
+            console.print("[dim]Tip: set CONFLUENCE_EMAIL and CONFLUENCE_API_TOKEN env vars to skip this prompt.[/]")
+
+            if not email:
+                email = input("Atlassian email: ").strip()
+            if not token:
+                token = input("API token: ").strip()
+
+            if not email or not token:
+                return ""
+
+        api_url = f"https://{domain}.atlassian.net/wiki/rest/api/content/{page_id}?expand=body.storage"
+
+        try:
+            resp = httpx.get(
+                api_url,
+                auth=httpx.BasicAuth(email, token),
+                headers={"Accept": "application/json"},
+                timeout=15,
+            )
+
+            if resp.status_code == 200:
+                data = resp.json()
+                title = data.get("title", "")
+                html_body = data.get("body", {}).get("storage", {}).get("value", "")
+                text = self._extract_text(html_body, "text/html")
+                if title:
+                    text = f"# {title}\n\n{text}"
+                logger.info("Confluence page fetched: '%s' (%d chars)", title, len(text))
+                return text
+            elif resp.status_code in (401, 403):
+                logger.warning("Confluence API auth failed (HTTP %d). Check email/token.", resp.status_code)
+            else:
+                logger.warning("Confluence API returned HTTP %d for page %s.", resp.status_code, page_id)
+
+        except Exception as e:
+            logger.warning("Confluence API fetch failed: %s", e)
 
         return ""
 
@@ -385,7 +487,7 @@ class StoryAnalyzer:
                 input=prompt,
                 capture_output=True,
                 text=True,
-                timeout=120,
+                timeout=300,
             )
             if result.returncode == 0 and result.stdout.strip():
                 logger.info("Claude CLI analysis succeeded.")
@@ -397,7 +499,7 @@ class StoryAnalyzer:
                     result.returncode, stderr[:200],
                 )
         except subprocess.TimeoutExpired:
-            logger.warning("Claude CLI analysis timed out (120s).")
+            logger.warning("Claude CLI analysis timed out (300s).")
         except FileNotFoundError:
             logger.warning("Claude Code CLI not found in PATH.")
 
@@ -494,8 +596,23 @@ class StoryAnalyzer:
         try:
             data = json.loads(text)
         except json.JSONDecodeError:
-            logger.warning("Could not parse AI response as JSON, using raw text.")
-            return AnalysisResult(summary=text[:500], raw_response=response)
+            # Try to find a JSON object anywhere in the response (handles preamble text).
+            json_match = re.search(r'\{[^{}]*"summary"[^{}]*\}', text, re.DOTALL)
+            if not json_match:
+                # Try to find a partial JSON that starts with { but is truncated.
+                json_match = re.search(r'(\{.*"summary"\s*:\s*"[^"]*".*)', text, re.DOTALL)
+            if json_match:
+                try:
+                    data = json.loads(json_match.group(0))
+                except json.JSONDecodeError:
+                    # Partial JSON — extract what we can with regex.
+                    data = self._extract_fields_from_partial_json(json_match.group(0))
+                    if not data:
+                        logger.warning("Could not parse AI response as JSON, using raw text.")
+                        return AnalysisResult(summary=text[:500], raw_response=response)
+            else:
+                logger.warning("Could not parse AI response as JSON, using raw text.")
+                return AnalysisResult(summary=text[:500], raw_response=response)
 
         return AnalysisResult(
             summary=data.get("summary", ""),
@@ -509,6 +626,32 @@ class StoryAnalyzer:
             recommendation=data.get("recommendation", ""),
             raw_response=response,
         )
+
+    def _extract_fields_from_partial_json(self, text: str) -> dict | None:
+        """Extract fields from truncated JSON using regex."""
+        import re
+
+        fields: dict = {}
+
+        # Extract string fields.
+        for key in ("summary", "approach", "confidence", "estimated_complexity", "recommendation"):
+            m = re.search(rf'"{key}"\s*:\s*"((?:[^"\\]|\\.)*)"', text, re.DOTALL)
+            if m:
+                fields[key] = m.group(1).replace('\\"', '"').replace('\\n', '\n')
+
+        # Extract boolean.
+        m = re.search(r'"requires_code_change"\s*:\s*(true|false)', text, re.IGNORECASE)
+        if m:
+            fields["requires_code_change"] = m.group(1).lower() == "true"
+
+        # Extract arrays (best effort).
+        for key in ("affected_areas", "risks", "questions"):
+            m = re.search(rf'"{key}"\s*:\s*\[(.*?)\]', text, re.DOTALL)
+            if m:
+                items = re.findall(r'"((?:[^"\\]|\\.)*)"', m.group(1))
+                fields[key] = items
+
+        return fields if fields.get("summary") else None
 
     def _load_system_prompt(self) -> str:
         """Load the analysis system prompt template."""
