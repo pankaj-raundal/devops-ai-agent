@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -82,15 +84,36 @@ class StoryAnalyzer:
             logger.debug("Failed to record token usage: %s", e)
 
     def analyze(self, story_context: str, module_summary: str = "") -> AnalysisResult:
-        """Analyze a story and return structured findings."""
+        """Analyze a story and return structured findings.
+
+        Strategy: Python heuristic → fetch URLs → Claude CLI (Team plan) → API (fallback).
+        """
+        # Step 1: Python heuristic — catch obvious non-code stories for free.
+        heuristic = self._python_heuristic(story_context)
+        if heuristic is not None:
+            logger.info("Python heuristic resolved analysis — no AI call needed.")
+            return heuristic
+
+        # Step 1b: Fetch URLs referenced in the story (pure Python, free).
+        # Enriches the context so Claude CLI gets full background on spikes/research.
+        url_context = self._extract_and_fetch_urls(story_context)
+        if url_context:
+            story_context = story_context + "\n\n" + url_context
+            logger.info("Enriched story context with URL content (%d chars added).", len(url_context))
+
+        # Step 2: Claude Code CLI — uses Team plan, zero API cost.
+        cli_result = self._try_claude_cli(story_context, module_summary)
+        if cli_result is not None:
+            return cli_result
+
+        # Step 3: API fallback — uses ANTHROPIC_API_KEY / OPENAI_API_KEY.
+        logger.info("Falling back to %s API for analysis.", self.provider)
         system_prompt = self._load_system_prompt()
 
         user_prompt = f"## Story Context\n\n{story_context}\n"
         if module_summary:
             user_prompt += f"\n## Module Structure\n\n{module_summary}\n"
         user_prompt += "\nAnalyze this story and respond with the JSON output."
-
-        logger.info("Analyzing story via %s/%s...", self.provider, self.model)
 
         # Fail fast if we're in a rate limit cooldown.
         from src.utils.rate_limit import check_cooldown
@@ -111,6 +134,274 @@ class StoryAnalyzer:
                 summary=f"Analysis failed: {e}",
                 raw_response=str(e),
             )
+
+    def _python_heuristic(self, story_context: str) -> AnalysisResult | None:
+        """Pure Python analysis — catches obvious cases without any AI call.
+
+        Returns AnalysisResult for clear-cut cases, None if AI is needed.
+        """
+        ctx_lower = story_context.lower()
+
+        # Extract description section.
+        description = ""
+        for line in story_context.splitlines():
+            if line.startswith("## Description"):
+                idx = story_context.index(line) + len(line)
+                rest = story_context[idx:]
+                end = rest.find("\n## ")
+                description = (rest[:end].strip() if end > 0 else rest.strip())
+                break
+
+        # No description → flag low quality, let quality gate handle it.
+        if not description or description.lower() in ("none", "none specified", "n/a", ""):
+            return AnalysisResult(
+                summary="Story has no description — cannot determine requirements.",
+                requires_code_change=True,
+                confidence="low",
+                estimated_complexity="unknown",
+                recommendation="Add a description with clear requirements before processing.",
+            )
+
+        # Non-code story detection.
+        non_code_signals = [
+            "investigate", "research", "discuss", "meeting", "documentation only",
+            "no code change", "configuration change only", "environment setup",
+            "deployment only", "review only", "spike", "proof of concept",
+        ]
+        code_signals = [
+            "implement", "fix bug", "add feature", "create new", "modify the",
+            "update the code", "change the", "refactor", "migrate", "add a new",
+            "should return", "should display", "should handle", "add hook",
+            "add function", "add method", "add endpoint", "fix the",
+        ]
+
+        non_code_hits = sum(1 for s in non_code_signals if s in ctx_lower)
+        code_hits = sum(1 for s in code_signals if s in ctx_lower)
+
+        if non_code_hits >= 2 and code_hits == 0:
+            return AnalysisResult(
+                summary=(
+                    f"Story appears to be non-code (investigation/process). "
+                    f"{non_code_hits} non-code signal(s), 0 code signals."
+                ),
+                requires_code_change=False,
+                confidence="high",
+                estimated_complexity="trivial",
+                recommendation="This story does not require code changes. Review manually.",
+            )
+
+        # Can't determine confidently — needs AI.
+        return None
+
+    # --- URL fetching ---
+
+    def _extract_and_fetch_urls(self, story_context: str) -> str:
+        """Extract URLs from story context, fetch their content, return as markdown.
+
+        Pure Python — no AI cost. Handles:
+        - Public URLs: fetched directly.
+        - Auth-protected URLs (401/403): prompts user for credentials interactively.
+        - Timeouts / errors: logged and skipped gracefully.
+
+        Returns a markdown section with fetched content, or empty string.
+        """
+        # Extract URLs (http/https only, skip Azure DevOps work item URLs).
+        urls = re.findall(r'https?://[^\s<>"\)\]]+', story_context)
+        # De-duplicate while preserving order.
+        seen: set[str] = set()
+        unique_urls: list[str] = []
+        for url in urls:
+            # Strip trailing punctuation that's not part of the URL.
+            url = url.rstrip(".,;:!?)")
+            if url not in seen and "_workitems/edit/" not in url:
+                seen.add(url)
+                unique_urls.append(url)
+
+        if not unique_urls:
+            return ""
+
+        logger.info("Found %d URL(s) in story context: %s", len(unique_urls), unique_urls)
+
+        sections: list[str] = []
+        for url in unique_urls[:3]:  # Cap at 3 URLs to avoid bloating context.
+            content = self._fetch_url(url)
+            if content:
+                # Truncate to keep context reasonable for Claude CLI.
+                if len(content) > 8000:
+                    content = content[:8000] + "\n\n... (content truncated at 8,000 chars)"
+                sections.append(f"### Content from: {url}\n\n{content}")
+
+        if not sections:
+            return ""
+
+        return "## Referenced Documents (auto-fetched)\n\n" + "\n\n".join(sections)
+
+    def _fetch_url(self, url: str) -> str:
+        """Fetch a single URL and return its text content.
+
+        Tries unauthenticated first. If 401/403 and running interactively,
+        prompts the user for credentials and retries once.
+        Returns empty string on failure.
+        """
+        import sys
+
+        import httpx
+
+        headers = {
+            "User-Agent": "DevOps-AI-Agent/1.0 (story-analyzer)",
+            "Accept": "text/html, application/json, text/plain",
+        }
+
+        try:
+            resp = httpx.get(url, headers=headers, timeout=15, follow_redirects=True)
+
+            if resp.status_code in (401, 403):
+                logger.info("URL requires authentication (HTTP %d): %s", resp.status_code, url)
+
+                # Only prompt if running interactively.
+                if not sys.stdin.isatty():
+                    logger.warning("Non-interactive mode — skipping auth-protected URL.")
+                    return ""
+
+                return self._fetch_url_with_credentials(url, headers)
+
+            if resp.status_code != 200:
+                logger.warning("URL returned HTTP %d: %s", resp.status_code, url)
+                return ""
+
+            return self._extract_text(resp.text, resp.headers.get("content-type", ""))
+
+        except httpx.TimeoutException:
+            logger.warning("URL fetch timed out (15s): %s", url)
+        except httpx.RequestError as e:
+            logger.warning("URL fetch failed: %s — %s", url, e)
+        except Exception as e:
+            logger.warning("Unexpected error fetching URL %s: %s", url, e)
+
+        return ""
+
+    def _fetch_url_with_credentials(self, url: str, headers: dict) -> str:
+        """Prompt user for credentials and retry the URL fetch."""
+        import httpx
+        from rich.console import Console
+
+        console = Console()
+        console.print(f"\n[yellow]URL requires authentication:[/] {url}")
+        console.print("Options: (1) Username/password  (2) Bearer token  (3) Cookie  (s) Skip")
+
+        choice = input("Choice [1/2/3/s]: ").strip().lower()
+        if choice == "s" or not choice:
+            return ""
+
+        auth = None
+        extra_headers = dict(headers)
+
+        if choice == "1":
+            username = input("Username: ").strip()
+            password = input("Password: ").strip()
+            if not username:
+                return ""
+            auth = httpx.BasicAuth(username, password)
+        elif choice == "2":
+            token = input("Bearer token: ").strip()
+            if not token:
+                return ""
+            extra_headers["Authorization"] = f"Bearer {token}"
+        elif choice == "3":
+            cookie = input("Cookie header value: ").strip()
+            if not cookie:
+                return ""
+            extra_headers["Cookie"] = cookie
+        else:
+            return ""
+
+        try:
+            resp = httpx.get(
+                url, headers=extra_headers, auth=auth,
+                timeout=15, follow_redirects=True,
+            )
+            if resp.status_code == 200:
+                logger.info("Authenticated fetch succeeded for %s", url)
+                return self._extract_text(resp.text, resp.headers.get("content-type", ""))
+            else:
+                logger.warning("Authenticated fetch returned HTTP %d for %s", resp.status_code, url)
+        except Exception as e:
+            logger.warning("Authenticated fetch failed for %s: %s", url, e)
+
+        return ""
+
+    @staticmethod
+    def _extract_text(body: str, content_type: str) -> str:
+        """Extract readable text from an HTTP response body.
+
+        Handles HTML (strips tags, extracts main content), JSON, and plain text.
+        """
+        ct = content_type.lower()
+
+        if "json" in ct:
+            # Return pretty-printed JSON.
+            try:
+                data = json.loads(body)
+                return json.dumps(data, indent=2, ensure_ascii=False)
+            except json.JSONDecodeError:
+                return body[:8000]
+
+        if "html" in ct:
+            # Extract meaningful text from HTML.
+            # Remove script/style blocks first.
+            text = re.sub(r'<(script|style|nav|header|footer)[^>]*>.*?</\1>', '', body, flags=re.DOTALL | re.IGNORECASE)
+            # Remove HTML tags.
+            text = re.sub(r'<[^>]+>', ' ', text)
+            # Collapse whitespace.
+            text = re.sub(r'[ \t]+', ' ', text)
+            text = re.sub(r'\n\s*\n+', '\n\n', text)
+            # Decode HTML entities.
+            import html
+            text = html.unescape(text)
+            return text.strip()
+
+        # Plain text / other.
+        return body.strip()
+
+    def _try_claude_cli(self, story_context: str, module_summary: str = "") -> AnalysisResult | None:
+        """Analyze via Claude Code CLI — uses Team plan, no API cost."""
+        from src.agent.implement import _command_exists
+
+        if not _command_exists("claude"):
+            logger.debug("Claude Code CLI not available — skipping to API fallback.")
+            return None
+
+        system_prompt = self._load_system_prompt()
+        prompt = f"{system_prompt}\n\n## Story Context\n\n{story_context}\n"
+        if module_summary:
+            prompt += f"\n## Module Structure\n\n{module_summary}\n"
+        prompt += "\nAnalyze this story and respond with ONLY the JSON output."
+
+        logger.info("Analyzing via Claude Code CLI (%d chars)...", len(prompt))
+
+        try:
+            result = subprocess.run(
+                ["claude", "-p"],
+                input=prompt,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                logger.info("Claude CLI analysis succeeded.")
+                return self._parse_response(result.stdout)
+            else:
+                stderr = (result.stderr or "").strip()
+                logger.warning(
+                    "Claude CLI analysis failed (exit %d): %s",
+                    result.returncode, stderr[:200],
+                )
+        except subprocess.TimeoutExpired:
+            logger.warning("Claude CLI analysis timed out (120s).")
+        except FileNotFoundError:
+            logger.warning("Claude Code CLI not found in PATH.")
+
+        return None
 
     def _call_ai(self, system_prompt: str, user_prompt: str) -> str:
         """Call the configured AI provider.
