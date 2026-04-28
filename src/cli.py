@@ -48,17 +48,31 @@ def fetch(ctx):
 
 @main.command()
 @click.option("--story-id", "-s", type=int, default=None, help="Specific work item ID")
-@click.option("--skip-tests", is_flag=True, help="Skip test execution")
-@click.option("--skip-analysis", is_flag=True, help="Skip AI analysis stage (saves API quota)")
-@click.option("--dry-run", is_flag=True, help="Fetch story and build context only — no branch, AI, or tests")
-@click.option("--fresh", is_flag=True, help="Discard previous branch and start clean")
-@click.option("--ci", is_flag=True, help="CI mode: suppress all interactive prompts, auto-approve plan and push")
-@click.option("--skip-git-add", is_flag=True, help="Skip git add/commit/push — AI writes files but does not stage or commit them. You can review and commit manually.")
+@click.option("--skip-tests/--no-skip-tests", default=None, help="Skip test execution (overrides config runtime.skip_tests)")
+@click.option("--skip-analysis/--no-skip-analysis", default=None, help="Skip AI analysis stage (overrides config runtime.skip_analysis)")
+@click.option("--dry-run/--no-dry-run", default=None, help="Fetch story and build context only (overrides config runtime.dry_run)")
+@click.option("--fresh/--no-fresh", default=None, help="Discard previous branch and start clean (overrides config runtime.fresh)")
+@click.option("--ci/--no-ci", default=None, help="CI mode: suppress prompts, auto-approve (overrides config runtime.ci)")
+@click.option("--skip-git-add/--no-skip-git-add", default=None, help="Skip git add/commit/push (overrides config runtime.skip_git_add)")
 @click.pass_context
 def run(ctx, story_id, skip_tests, skip_analysis, dry_run, fresh, ci, skip_git_add):
-    """Run the full pipeline: Fetch → Branch → Implement → Test → Review."""
+    """Run the full pipeline: Fetch → Branch → Implement → Test → Review.
+
+    Defaults are read from the `runtime:` section of config.yaml /
+    config.local.yaml. Any --flag passed on the command line overrides
+    the corresponding config value.
+    """
     from .pipeline import Pipeline
     from .utils.progress import PipelineProgress
+
+    # Merge CLI flags with config defaults (CLI wins when explicitly set).
+    runtime_cfg = ctx.obj["config"].get("runtime", {}) or {}
+    skip_tests = _resolve(skip_tests, runtime_cfg.get("skip_tests", False))
+    skip_analysis = _resolve(skip_analysis, runtime_cfg.get("skip_analysis", False))
+    dry_run = _resolve(dry_run, runtime_cfg.get("dry_run", False))
+    fresh = _resolve(fresh, runtime_cfg.get("fresh", False))
+    ci = _resolve(ci, runtime_cfg.get("ci", False))
+    skip_git_add = _resolve(skip_git_add, runtime_cfg.get("skip_git_add", False))
 
     pipeline = Pipeline(ctx.obj["config"], ci_mode=ci)
 
@@ -78,6 +92,11 @@ def run(ctx, story_id, skip_tests, skip_analysis, dry_run, fresh, ci, skip_git_a
 
     if not all(r.success for r in results):
         sys.exit(1)
+
+
+def _resolve(cli_value: bool | None, config_value: bool) -> bool:
+    """Resolve a flag: CLI value wins if explicitly set (not None), else fall back to config."""
+    return cli_value if cli_value is not None else bool(config_value)
 
 
 @main.command()

@@ -23,6 +23,7 @@ class WorkItem:
     acceptance_criteria: str = ""
     tags: str = ""
     comments: list[dict[str, str]] = field(default_factory=list)
+    attachments: list[dict[str, str]] = field(default_factory=list)
     url: str = ""
 
 
@@ -66,6 +67,10 @@ class AzureDevOpsClient:
         self.auto_tag = ado.get("auto_tag", "auto")
         self.states = ado.get("states", ["New", "Active"])
         self.current_sprint_only = ado.get("current_sprint_only", True)
+        # Attachment fetching settings.
+        self.fetch_attachments = ado.get("fetch_attachments", True)
+        self.max_attachments = int(ado.get("max_attachments", 5))
+        self.max_attachment_size_kb = int(ado.get("max_attachment_size_kb", 100))
 
     def fetch_latest_story(self) -> WorkItem | None:
         """Fetch the latest work item matching filters."""
@@ -131,6 +136,12 @@ class AzureDevOpsClient:
         # Fetch discussion comments.
         wi.comments = self._fetch_comments(work_item_id)
         logger.info("Fetched %d comment(s) for #%s", len(wi.comments), work_item_id)
+
+        # Fetch attachments (if enabled).
+        if self.fetch_attachments:
+            wi.attachments = self._fetch_attachments(work_item_id)
+            if wi.attachments:
+                logger.info("Fetched %d attachment(s) for #%s", len(wi.attachments), work_item_id)
         return wi
 
     def create_work_item(
@@ -217,6 +228,125 @@ class AzureDevOpsClient:
                     "text": _strip_html(new_value),
                 })
         return comments
+
+    def _fetch_attachments(self, work_item_id: int) -> list[dict[str, str]]:
+        """Fetch attachments linked to a work item.
+
+        Returns a list of dicts: {name, url, size, content (text only)}.
+        Inlines text-like content (.txt/.md/.html/.json/.xml/.xliff/.xlf/.csv/.log)
+        up to max_attachment_size_kb. Binary files are listed by name only.
+        """
+        import base64
+        import os
+        from urllib.parse import urlparse
+
+        # Get the work item with relations expanded.
+        try:
+            data = _run_az_json([
+                "boards", "work-item", "show",
+                "--id", str(work_item_id),
+                "--org", self.org,
+                "--expand", "relations",
+            ])
+        except RuntimeError as e:
+            logger.warning("Could not fetch relations for #%s: %s", work_item_id, e)
+            return []
+
+        relations = data.get("relations", []) or []
+        attachments: list[dict[str, str]] = []
+        text_exts = {".txt", ".md", ".html", ".htm", ".json", ".xml", ".xliff",
+                     ".xlf", ".csv", ".log", ".yaml", ".yml", ".php", ".js",
+                     ".ts", ".css", ".sql"}
+        max_bytes = self.max_attachment_size_kb * 1024
+
+        # Build auth header. Prefer PAT, fall back to `az account get-access-token`.
+        pat = os.environ.get("AZURE_DEVOPS_PAT", "") or os.environ.get("AZURE_DEVOPS_EXT_PAT", "")
+        auth_header = None
+        if pat:
+            token = base64.b64encode(f":{pat}".encode()).decode()
+            auth_header = f"Basic {token}"
+        else:
+            # Use az CLI access token (works when user runs `az login`).
+            try:
+                token_data = _run_az_json([
+                    "account", "get-access-token",
+                    "--resource", "499b84ac-1321-427f-aa17-267ca6975798",  # Azure DevOps resource ID
+                ])
+                access_token = token_data.get("accessToken", "")
+                if access_token:
+                    auth_header = f"Bearer {access_token}"
+            except Exception as e:
+                logger.warning("Could not obtain az access token: %s", e)
+
+        # De-duplicate by URL (same attachment may appear in multiple relations).
+        seen_urls: set[str] = set()
+        attachment_count = 0
+        for rel in relations:
+            if rel.get("rel") != "AttachedFile":
+                continue
+            url = rel.get("url", "")
+            if url in seen_urls:
+                continue
+            seen_urls.add(url)
+            if attachment_count >= self.max_attachments:
+                logger.info("Reached max_attachments limit (%d), skipping rest.", self.max_attachments)
+                break
+
+            name = rel.get("attributes", {}).get("name", "unknown")
+            size = rel.get("attributes", {}).get("resourceSize", 0)
+
+            entry: dict[str, str] = {
+                "name": name,
+                "url": url,
+                "size": str(size),
+                "content": "",
+            }
+
+            ext = os.path.splitext(name)[1].lower()
+            is_text = ext in text_exts
+
+            # Skip download for binary files or oversize files.
+            if not is_text:
+                entry["content"] = f"(binary file, {size} bytes — not inlined)"
+                attachments.append(entry)
+                attachment_count += 1
+                continue
+
+            if size > max_bytes:
+                entry["content"] = f"(text file too large: {size} bytes, max {max_bytes})"
+                attachments.append(entry)
+                attachment_count += 1
+                continue
+
+            if not auth_header:
+                entry["content"] = "(no auth: set AZURE_DEVOPS_PAT or run `az login`)"
+                attachments.append(entry)
+                attachment_count += 1
+                continue
+
+            # Download via httpx.
+            try:
+                import httpx
+                resp = httpx.get(
+                    url,
+                    headers={"Authorization": auth_header, "Accept": "application/octet-stream"},
+                    timeout=30,
+                    follow_redirects=True,
+                )
+                if resp.status_code == 200:
+                    entry["content"] = resp.text[:max_bytes]
+                    logger.info("Downloaded attachment '%s' (%d bytes)", name, len(resp.text))
+                else:
+                    entry["content"] = f"(download failed: HTTP {resp.status_code})"
+                    logger.warning("Attachment download failed for '%s': %d", name, resp.status_code)
+            except Exception as e:
+                entry["content"] = f"(download error: {e})"
+                logger.warning("Attachment download error for '%s': %s", name, e)
+
+            attachments.append(entry)
+            attachment_count += 1
+
+        return attachments
 
     def _build_wiql(self) -> str:
         """Build the WIQL query string."""

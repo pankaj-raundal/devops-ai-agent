@@ -248,8 +248,16 @@ class AIReviewer:
         logger.info("Reviewing via Claude Code CLI (%d chars)...", len(prompt))
 
         try:
+            cmd = ["claude", "-p"]
+            # Attach MCP config if available — gives Claude access to git + filesystem.
+            from src.mcp.config import get_mcp_config_path
+            mcp_config = get_mcp_config_path()
+            if mcp_config:
+                cmd.extend(["--mcp-config", str(mcp_config)])
+                logger.info("Reviewer using MCP config: %s", mcp_config)
+
             result = subprocess.run(
-                ["claude", "-p"],
+                cmd,
                 input=prompt,
                 capture_output=True,
                 text=True,

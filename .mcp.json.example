@@ -1,0 +1,31 @@
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "python",
+      "args": ["-m", "src.mcp.filesystem_server"],
+      "env": {
+        "MODULE_PATH": "/path/to/your/module",
+        "WORKSPACE_PATH": "/path/to/your/workspace",
+        "MCP_LOG_DIR": ".dai/logs"
+      }
+    },
+    "azure-devops": {
+      "command": "python",
+      "args": ["-m", "src.mcp.azure_devops_server"],
+      "env": {
+        "AZURE_DEVOPS_ORG": "https://dev.azure.com/your-org",
+        "AZURE_DEVOPS_PROJECT": "Your Project",
+        "MCP_LOG_DIR": ".dai/logs"
+      }
+    },
+    "git": {
+      "command": "python",
+      "args": ["-m", "src.mcp.git_server"],
+      "env": {
+        "GIT_WORKSPACE": "/path/to/your/workspace",
+        "GIT_BASE_BRANCH": "master",
+        "MCP_LOG_DIR": ".dai/logs"
+      }
+    }
+  }
+}

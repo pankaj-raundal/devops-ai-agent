@@ -21,6 +21,7 @@ env/
 # Config / secrets
 .env
 config/config.local.yaml
+.mcp.json
 
 # Runtime
 logs/

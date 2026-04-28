@@ -30,6 +30,10 @@ azure_devops:
   state_on_success: "Testing"    # After successful pipeline (code change path)
   state_on_no_code: "Evaluation" # After analysis finds no code change needed
   state_on_failure: ""           # Leave empty to keep current state on failure
+  # --- Attachments (downloaded from work item relations) ---
+  fetch_attachments: true        # Download attachments and inline text content into prompt
+  max_attachments: 5             # Cap number of attachments per story
+  max_attachment_size_kb: 100    # Max size for inlining text content (binary files always skipped)
 
 # --- Zendesk ---
 zendesk:
@@ -132,3 +136,16 @@ logging:
   level: "INFO"                # DEBUG, INFO, WARNING, ERROR
   file: "logs/agent.log"
   max_size_mb: 10
+
+# --- Runtime Defaults ---
+# Default flags for `dai run`. CLI flags override these:
+#   dai run -s 1234              → uses these defaults
+#   dai run -s 1234 --skip-tests → forces skip_tests=true regardless of config
+#   dai run -s 1234 --no-fresh   → forces fresh=false regardless of config
+runtime:
+  skip_tests: false              # Skip phpunit/pytest/etc. execution
+  skip_analysis: false           # Skip the AI analysis stage (saves API quota)
+  skip_git_add: false            # AI writes files but does not git add/commit/push
+  fresh: false                   # Always discard existing feature branch and start clean
+  ci: false                      # CI mode: no interactive prompts, auto-approve everything
+  dry_run: false                 # Only fetch story + build context, then exit

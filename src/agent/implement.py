@@ -462,6 +462,11 @@ class ImplementationAgent:
 
         try:
             cmd = ["claude", "-p"]
+            # Attach MCP config if available.
+            from src.mcp.config import get_mcp_config_path
+            mcp_config = get_mcp_config_path()
+            if mcp_config:
+                cmd.extend(["--mcp-config", str(mcp_config)])
             result = subprocess.run(
                 cmd, input=prompt, cwd=self.workspace_dir,
                 capture_output=True, text=True, timeout=600,
@@ -1428,6 +1433,14 @@ class ImplementationAgent:
         if self.approval_mode == "auto":
             cmd.append("--dangerously-skip-permissions")
             logger.warning("Using --dangerously-skip-permissions (auto mode).")
+
+        # Attach MCP config if available — gives Claude tool access to filesystem,
+        # Azure DevOps, and git via MCP servers instead of blind text pipe.
+        from src.mcp.config import get_mcp_config_path
+        mcp_config = get_mcp_config_path()
+        if mcp_config:
+            cmd.extend(["--mcp-config", str(mcp_config)])
+            logger.info("Claude CLI using MCP config: %s", mcp_config)
 
         max_retries = self.max_cli_retries if self.cli_only else 3
         base_wait = self.cli_retry_base_wait

@@ -69,6 +69,7 @@ _MAX_COMMENTS_CHARS = 2000
 def build_story_context(work_item: WorkItem, config: dict) -> str:
     """Build a markdown context document from a work item."""
     comments_md = _build_comments_section(work_item.comments)
+    attachments_md = _build_attachments_section(getattr(work_item, "attachments", []))
 
     module_path = config["project"].get("module_path", "")
     project_name = config["project"].get("name", "")
@@ -100,7 +101,7 @@ def build_story_context(work_item: WorkItem, config: dict) -> str:
 ## Discussion / Comments
 
 {comments_md}
-
+{attachments_md}
 ## Development Notes
 
 - Project: {project_name}
@@ -109,6 +110,28 @@ def build_story_context(work_item: WorkItem, config: dict) -> str:
 {dev_notes}
 """
     return context
+
+
+def _build_attachments_section(attachments: list[dict]) -> str:
+    """Build the attachments section of the context document."""
+    if not attachments:
+        return ""
+
+    parts = ["\n## Attachments\n"]
+    for att in attachments:
+        name = att.get("name", "unknown")
+        size = att.get("size", "0")
+        content = att.get("content", "")
+        parts.append(f"\n### {name} ({size} bytes)\n")
+        if content.startswith("(") and content.endswith(")"):
+            # Status message (binary, too large, error).
+            parts.append(f"_{content}_\n")
+        else:
+            # Inlined text content.
+            parts.append("```\n")
+            parts.append(content)
+            parts.append("\n```\n")
+    return "".join(parts)
 
 
 def save_story_context(work_item: WorkItem, config: dict) -> Path:

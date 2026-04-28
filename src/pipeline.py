@@ -185,6 +185,17 @@ class Pipeline:
             }))
             return results
 
+        # --- Generate MCP config for Claude CLI sessions ---
+        # Creates .mcp.json with correct MODULE_PATH, workspace, and ADO env vars
+        # so all Claude CLI calls (analyze, implement, review) get MCP tool access.
+        try:
+            from src.mcp.config import generate_mcp_config
+            module_abs = str(self.workspace / self.implementer.module_path) if self.implementer.module_path else str(self.workspace)
+            generate_mcp_config(module_abs, str(self.workspace), self.config)
+            logger.info("MCP config generated for Claude CLI sessions.")
+        except Exception as e:
+            logger.warning("Failed to generate MCP config (Claude CLI will run without MCP): %s", e)
+
         # --- Stage 2: AI Analysis (non-blocking) ---
         # Analysis is helpful but not required — if it fails (e.g. rate limit),
         # skip it and proceed to implementation.
@@ -272,6 +283,7 @@ class Pipeline:
                         "work_item_id": work_item.id,
                         "requires_code_change": False,
                     }))
+                    self._append_mcp_logs(tlog)
                     save_run_record(self.config, {
                         "work_item_id": work_item.id,
                         "failed_stage": None,
@@ -471,6 +483,7 @@ class Pipeline:
                 }))
             tlog.section("Pipeline Complete (skip-git-add)")
             tlog.kv("Branch", branch_name)
+            self._append_mcp_logs(tlog)
             tlog.close()
             save_run_record(self.config, {
                 "work_item_id": work_item.id,
@@ -682,6 +695,10 @@ class Pipeline:
         tlog.section("Pipeline Complete")
         tlog.kv("Branch", branch_name)
         tlog.kv("PR URL", pr_url or "N/A")
+
+        # --- Append MCP tool-call logs ---
+        self._append_mcp_logs(tlog)
+
         tlog.close()
 
         save_run_record(self.config, {
@@ -696,6 +713,33 @@ class Pipeline:
         return results
 
     # --- Helper methods ---
+
+    def _append_mcp_logs(self, tlog) -> None:
+        """Collect MCP tool-call logs from this pipeline run and append to ticket log."""
+        from pathlib import Path
+        log_dir = Path(__file__).parent.parent / ".dai" / "logs"
+        if not log_dir.exists():
+            return
+
+        mcp_logs = sorted(log_dir.glob("mcp-*.log"))
+        if not mcp_logs:
+            return
+
+        tlog.section("MCP Tool Call Logs")
+        for log_file in mcp_logs:
+            try:
+                content = log_file.read_text(encoding="utf-8").strip()
+                if content:
+                    # Filename format: mcp-<server-name>-YYYYMMDD_HHMMSS.log
+                    # Strip "mcp-" prefix and "-YYYYMMDD_HHMMSS" suffix.
+                    stem = log_file.stem  # e.g. "mcp-azure-devops-20260428_090534"
+                    parts = stem.split("-")
+                    server_name = "-".join(parts[1:-1]) if len(parts) >= 3 else stem
+                    tlog.kv(f"Server: {server_name}", "")
+                    tlog.write(content)
+                    logger.info("MCP log: %s (%d lines)", log_file.name, content.count("\n") + 1)
+            except Exception as e:
+                logger.warning("Failed to read MCP log %s: %s", log_file.name, e)
 
     def _get_plan_approval(self, plan: ImplementationPlan) -> ImplementationPlan:
         """Get approval for an implementation plan.
