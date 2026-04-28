@@ -38,6 +38,51 @@ _chars_read = 0
 MODULE_PATH = Path(os.environ.get("MODULE_PATH", ".")).resolve()
 WORKSPACE_PATH = Path(os.environ.get("WORKSPACE_PATH", MODULE_PATH)).resolve()
 
+# ── Phase 2 security: write quota + sensitive path blocklist ──
+# Cap at 30 writes per session by default (override via MCP_WRITE_QUOTA env var).
+WRITE_QUOTA = int(os.environ.get("MCP_WRITE_QUOTA", "30"))
+_writes_used = 0
+
+# Filenames / path fragments that require manual approval to modify (dependency
+# manifests, secrets files, CI config, build files). These should rarely be
+# touched by an AI agent automatically.
+SENSITIVE_WRITE_PATTERNS: tuple[str, ...] = (
+    ".env", ".env.local", ".env.production",
+    "composer.json", "composer.lock",
+    "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+    "pyproject.toml", "poetry.lock", "requirements.txt",
+    "Gemfile", "Gemfile.lock",
+    "go.mod", "go.sum",
+    "Cargo.toml", "Cargo.lock",
+    "Dockerfile", "docker-compose.yml", "docker-compose.yaml",
+    ".gitignore", ".gitattributes",
+)
+
+# Path fragments (anywhere in the relative path) that are blocked outright.
+SENSITIVE_DIR_FRAGMENTS: tuple[str, ...] = (
+    ".github/", ".git/", ".ssh/", ".aws/", ".azure/",
+)
+
+
+def _check_sensitive_write(rel_path: str) -> str | None:
+    """Return an error string if the write should be refused, else None."""
+    # Allow opt-in override via env var (comma-separated list set by pipeline).
+    allowlist = {p.strip() for p in os.environ.get("MCP_ALLOW_SENSITIVE_WRITE", "").split(",") if p.strip()}
+    if rel_path in allowlist:
+        return None
+    name = Path(rel_path).name
+    if name in SENSITIVE_WRITE_PATTERNS:
+        return (
+            f"Refused: '{rel_path}' is a sensitive file (dependency/secrets/CI manifest). "
+            f"It requires manual approval — add to MCP_ALLOW_SENSITIVE_WRITE if intentional."
+        )
+    norm = rel_path.replace("\\", "/")
+    for frag in SENSITIVE_DIR_FRAGMENTS:
+        if frag in norm or norm.startswith(frag.rstrip("/")):
+            return f"Refused: '{rel_path}' is inside a sensitive directory ({frag})."
+    return None
+
+
 # Set up file-based logging for this MCP server.
 _mcp_logger = setup_mcp_file_logger("filesystem")
 _mcp_logger.info("MODULE_PATH=%s", MODULE_PATH)
@@ -161,6 +206,21 @@ def write_file(path: str, content: str) -> str:
     Returns:
         Confirmation message.
     """
+    global _writes_used
+
+    # Phase 2: write quota.
+    if _writes_used >= WRITE_QUOTA:
+        msg = f"Refused: write quota exhausted ({WRITE_QUOTA} writes/session). Aborting to prevent runaway loop."
+        log_tool_call(_mcp_logger, "write_file", {"path": path, "blocked": "quota"}, msg)
+        return msg
+
+    # Phase 2: sensitive-path blocklist.
+    sensitive_err = _check_sensitive_write(path)
+    if sensitive_err:
+        log_tool_call(_mcp_logger, "write_file", {"path": path, "blocked": "sensitive"}, sensitive_err)
+        _mcp_logger.warning("BLOCKED sensitive write: %s", path)
+        return sensitive_err
+
     target = _resolve_safe(path)
 
     # Create parent directories if needed.
@@ -177,9 +237,10 @@ def write_file(path: str, content: str) -> str:
     except Exception as e:
         return f"Error writing {path}: {e}"
 
-    logger.info("Wrote %s (%d chars)", path, len(content))
-    result = f"Successfully wrote {path} ({len(content)} chars)"
-    log_tool_call(_mcp_logger, "write_file", {"path": path, "content_len": len(content)}, result)
+    _writes_used += 1
+    logger.info("Wrote %s (%d chars) [%d/%d quota]", path, len(content), _writes_used, WRITE_QUOTA)
+    result = f"Successfully wrote {path} ({len(content)} chars) [{_writes_used}/{WRITE_QUOTA}]"
+    log_tool_call(_mcp_logger, "write_file", {"path": path, "content_len": len(content), "writes_used": _writes_used}, result)
     return result
 
 
@@ -277,9 +338,10 @@ def _get_cache_clear_command() -> str:
 
 
 def reset_budget() -> None:
-    """Reset the read budget counter (for testing)."""
-    global _chars_read
+    """Reset the read budget + write quota counters (for testing)."""
+    global _chars_read, _writes_used
     _chars_read = 0
+    _writes_used = 0
 
 
 if __name__ == "__main__":

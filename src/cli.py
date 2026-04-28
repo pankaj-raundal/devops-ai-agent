@@ -54,8 +54,9 @@ def fetch(ctx):
 @click.option("--fresh/--no-fresh", default=None, help="Discard previous branch and start clean (overrides config runtime.fresh)")
 @click.option("--ci/--no-ci", default=None, help="CI mode: suppress prompts, auto-approve (overrides config runtime.ci)")
 @click.option("--skip-git-add/--no-skip-git-add", default=None, help="Skip git add/commit/push (overrides config runtime.skip_git_add)")
+@click.option("--i-accept-the-risk", "accept_risk", is_flag=True, help="Bypass security preflight blocking findings (audit-logged).")
 @click.pass_context
-def run(ctx, story_id, skip_tests, skip_analysis, dry_run, fresh, ci, skip_git_add):
+def run(ctx, story_id, skip_tests, skip_analysis, dry_run, fresh, ci, skip_git_add, accept_risk):
     """Run the full pipeline: Fetch → Branch → Implement → Test → Review.
 
     Defaults are read from the `runtime:` section of config.yaml /
@@ -64,6 +65,10 @@ def run(ctx, story_id, skip_tests, skip_analysis, dry_run, fresh, ci, skip_git_a
     """
     from .pipeline import Pipeline
     from .utils.progress import PipelineProgress
+
+    # ── Security preflight ──
+    if not _security_preflight(ctx.obj["config"], accept_risk):
+        sys.exit(2)
 
     # Merge CLI flags with config defaults (CLI wins when explicitly set).
     runtime_cfg = ctx.obj["config"].get("runtime", {}) or {}
@@ -97,6 +102,52 @@ def run(ctx, story_id, skip_tests, skip_analysis, dry_run, fresh, ci, skip_git_a
 def _resolve(cli_value: bool | None, config_value: bool) -> bool:
     """Resolve a flag: CLI value wins if explicitly set (not None), else fall back to config."""
     return cli_value if cli_value is not None else bool(config_value)
+
+
+def _security_preflight(config: dict, accept_risk: bool) -> bool:
+    """Run preflight; refuse to start the pipeline if there are CRITICAL findings.
+
+    Returns True to proceed, False to abort. Honors:
+      - --i-accept-the-risk flag
+      - config.security.enforce_preflight (default: True)
+    """
+    sec_cfg = (config or {}).get("security", {}) or {}
+    if sec_cfg.get("enforce_preflight", True) is False:
+        return True
+
+    from .security.preflight import run_preflight, has_blocking, summarize
+
+    findings = run_preflight(config)
+    blocking = has_blocking(findings)
+    counts = summarize(findings)
+
+    # Always print HIGH/CRITICAL so the user sees them.
+    notable = [f for f in findings if f.level in ("CRITICAL", "HIGH")]
+    if notable:
+        console.print("\n[bold]Security preflight:[/]")
+        for f in notable:
+            color = "red" if f.level == "CRITICAL" else "yellow"
+            console.print(f"  [{color}]{f.render()}[/]")
+        console.print(
+            f"  [dim]({counts['CRITICAL']} critical, {counts['HIGH']} high, "
+            f"{counts['WARN']} warn)[/]\n"
+        )
+
+    if blocking and not accept_risk:
+        console.print("[red bold]✗ Refusing to run with CRITICAL security findings.[/]")
+        console.print("[dim]Fix the issues above, or pass --i-accept-the-risk to proceed (audit-logged).[/]")
+        return False
+
+    if blocking and accept_risk:
+        import logging
+        logging.getLogger("devops_ai_agent.security").warning(
+            "SECURITY OVERRIDE: --i-accept-the-risk used with %d critical finding(s): %s",
+            counts["CRITICAL"],
+            [f.code for f in findings if f.is_blocking],
+        )
+        console.print("[yellow bold]⚠ Proceeding under --i-accept-the-risk override (logged).[/]\n")
+
+    return True
 
 
 @main.command()
@@ -345,13 +396,74 @@ def init_cmd():
     run_init()
 
 
-@main.command()
-@click.pass_context
-def doctor(ctx):
-    """Check environment health — verifies config, tools, and auth."""
-    from .setup import run_doctor, print_doctor_results
+@main.group()
+def security():
+    """Security commands — scoped credentials, preflight, audit."""
+    pass
 
+
+@security.command(name="setup")
+@click.pass_context
+def security_setup_cmd(ctx):
+    """Interactive wizard to create scoped credentials (ADO, GitHub)."""
+    from .security.wizard import run_security_setup
+
+    rc = run_security_setup(ctx.obj["config"])
+    sys.exit(rc)
+
+
+@security.command(name="check")
+@click.pass_context
+def security_check_cmd(ctx):
+    """Run the security preflight (alias for `dai doctor --security`)."""
+    from .security.preflight import run_preflight, summarize, has_blocking
+
+    findings = run_preflight(ctx.obj["config"])
+    for f in findings:
+        color = {"CRITICAL": "red", "HIGH": "yellow", "WARN": "yellow", "INFO": "green"}[f.level]
+        console.print(f"  [{color}]{f.render()}[/]\n")
+    counts = summarize(findings)
+    console.print(
+        f"[bold]Summary:[/] {counts['CRITICAL']} critical · "
+        f"{counts['HIGH']} high · {counts['WARN']} warn · {counts['INFO']} info"
+    )
+    if has_blocking(findings):
+        sys.exit(2)
+
+
+@main.command()
+@click.option("--security", "security_only", is_flag=True, help="Run only security preflight checks.")
+@click.pass_context
+def doctor(ctx, security_only):
+    """Check environment health — verifies config, tools, and auth.
+
+    With --security, runs the security preflight (token scope detection,
+    cloud-cred leak check, Claude CLI hardening readiness).
+    """
     config = ctx.obj["config"]
+
+    if security_only:
+        from .security.preflight import run_preflight, summarize, has_blocking
+
+        findings = run_preflight(config)
+        console.print("\n[bold cyan]Security Preflight[/]\n")
+        for f in findings:
+            color = {
+                "CRITICAL": "red", "HIGH": "yellow", "WARN": "yellow", "INFO": "green",
+            }[f.level]
+            console.print(f"  [{color}]{f.render()}[/]\n")
+        counts = summarize(findings)
+        console.print(
+            f"[bold]Summary:[/] {counts['CRITICAL']} critical · "
+            f"{counts['HIGH']} high · {counts['WARN']} warn · {counts['INFO']} info"
+        )
+        if has_blocking(findings):
+            console.print("\n[red bold]✗ Refusing to run with CRITICAL findings.[/]")
+            console.print("[dim]Override with: dai run --i-accept-the-risk[/]")
+            sys.exit(2)
+        return
+
+    from .setup import run_doctor, print_doctor_results
     checks = run_doctor(config)
     all_ok = print_doctor_results(checks)
     if not all_ok:
