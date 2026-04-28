@@ -45,11 +45,14 @@ def _build_comments_section(comments: list[dict[str, str]]) -> str:
         return "No human comments (pipeline-generated comments filtered).\n"
 
     # Include newest-first, capped at budget.
+    from src.security import wrap_untrusted
+
     result = ""
     total = len(human_comments)
     included = 0
     for c in reversed(human_comments):
-        entry = f"### {c['date']}\n{c['text']}\n\n"
+        wrapped_text = wrap_untrusted(c["text"], "story_comment")
+        entry = f"### {c['date']}\n{wrapped_text}\n\n"
         if len(result) + len(entry) > _MAX_COMMENTS_CHARS:
             break
         result += entry
@@ -68,6 +71,8 @@ _MAX_COMMENTS_CHARS = 2000
 
 def build_story_context(work_item: WorkItem, config: dict) -> str:
     """Build a markdown context document from a work item."""
+    from src.security import wrap_untrusted
+
     comments_md = _build_comments_section(work_item.comments)
     attachments_md = _build_attachments_section(getattr(work_item, "attachments", []))
 
@@ -81,6 +86,12 @@ def build_story_context(work_item: WorkItem, config: dict) -> str:
     profile = get_profile(config)
     dev_notes = profile["dev_notes"].replace("{cli_prefix}", cli_prefix) if cli_prefix else profile["dev_notes"]
 
+    # Wrap untrusted external content (description / AC) so the model treats
+    # it as data, not instructions. Comments and attachments are wrapped
+    # individually inside their own helpers.
+    description_safe = wrap_untrusted(work_item.description, "story_description")
+    criteria_safe = wrap_untrusted(work_item.acceptance_criteria, "acceptance_criteria")
+
     context = f"""# Current Work Item
 
 - **ID:** {work_item.id}
@@ -92,11 +103,11 @@ def build_story_context(work_item: WorkItem, config: dict) -> str:
 
 ## Description
 
-{work_item.description}
+{description_safe}
 
 ## Acceptance Criteria
 
-{work_item.acceptance_criteria}
+{criteria_safe}
 
 ## Discussion / Comments
 
@@ -116,6 +127,7 @@ def _build_attachments_section(attachments: list[dict]) -> str:
     """Build the attachments section of the context document."""
     if not attachments:
         return ""
+    from src.security import wrap_untrusted
 
     parts = ["\n## Attachments\n"]
     for att in attachments:
@@ -124,13 +136,12 @@ def _build_attachments_section(attachments: list[dict]) -> str:
         content = att.get("content", "")
         parts.append(f"\n### {name} ({size} bytes)\n")
         if content.startswith("(") and content.endswith(")"):
-            # Status message (binary, too large, error).
+            # Status message (binary, too large, error) — not user content.
             parts.append(f"_{content}_\n")
         else:
-            # Inlined text content.
-            parts.append("```\n")
-            parts.append(content)
-            parts.append("\n```\n")
+            # Inlined text content — wrap as untrusted.
+            parts.append(wrap_untrusted(content, f"attachment:{name}"))
+            parts.append("\n")
     return "".join(parts)
 
 

@@ -233,6 +233,8 @@ class StoryAnalyzer:
 
         logger.info("Found %d URL(s) in story context: %s", len(unique_urls), unique_urls)
 
+        from src.security import wrap_untrusted
+
         sections: list[str] = []
         for url in unique_urls[:3]:  # Cap at 3 URLs to avoid bloating context.
             content = self._fetch_url(url)
@@ -240,7 +242,9 @@ class StoryAnalyzer:
                 # Truncate to keep context reasonable for Claude CLI.
                 if len(content) > 8000:
                     content = content[:8000] + "\n\n... (content truncated at 8,000 chars)"
-                sections.append(f"### Content from: {url}\n\n{content}")
+                # Wrap as untrusted — fetched URLs are external content.
+                wrapped = wrap_untrusted(content, f"fetched_url:{url}")
+                sections.append(f"### Content from: {url}\n\n{wrapped}")
 
         if not sections:
             return ""
@@ -490,9 +494,14 @@ class StoryAnalyzer:
                 cmd.extend(["--mcp-config", str(mcp_config)])
                 logger.info("Analyzer using MCP config: %s", mcp_config)
 
+            # Security hardening: --allowedTools whitelist, scrubbed env.
+            from src.security import get_safe_subprocess_env, harden_claude_cli_args
+            cmd = harden_claude_cli_args(cmd, approval_mode="plan-review", config=self.config)
+
             result = subprocess.run(
                 cmd,
                 input=prompt,
+                env=get_safe_subprocess_env(),
                 capture_output=True,
                 text=True,
                 timeout=300,
@@ -663,6 +672,11 @@ class StoryAnalyzer:
 
     def _load_system_prompt(self) -> str:
         """Load the analysis system prompt template."""
-        if _TEMPLATE_PATH.exists():
-            return _TEMPLATE_PATH.read_text()
-        return "Analyze the story and respond with a JSON analysis."
+        from src.security import SECURITY_PROMPT_BLOCK
+
+        body = (
+            _TEMPLATE_PATH.read_text() if _TEMPLATE_PATH.exists()
+            else "Analyze the story and respond with a JSON analysis."
+        )
+        # Prepend SECURITY block so prompt-injection rules apply.
+        return f"{SECURITY_PROMPT_BLOCK}\n\n{body}"

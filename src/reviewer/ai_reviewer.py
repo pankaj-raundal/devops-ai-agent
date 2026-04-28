@@ -33,6 +33,7 @@ def _build_review_prompt(config: dict) -> str:
     from pathlib import Path
 
     from src.profiles import get_profile
+    from src.security import SECURITY_PROMPT_BLOCK
 
     profile = get_profile(config)
 
@@ -42,13 +43,15 @@ def _build_review_prompt(config: dict) -> str:
         full_path = Path(__file__).parent.parent.parent / template_path
         if full_path.exists():
             template = full_path.read_text()
-            return template.replace("{coding_standard}", profile["coding_standard"])
+            rendered = template.replace("{coding_standard}", profile["coding_standard"])
+            return f"{SECURITY_PROMPT_BLOCK}\n\n{rendered}"
 
     # Fallback: built-in template with profile values.
-    return REVIEW_SYSTEM_PROMPT.format(
+    body = REVIEW_SYSTEM_PROMPT.format(
         framework_label=profile["framework_label"],
         review_criteria=profile["review_criteria"],
     )
+    return f"{SECURITY_PROMPT_BLOCK}\n\n{body}"
 
 
 class AIReviewer:
@@ -256,9 +259,14 @@ class AIReviewer:
                 cmd.extend(["--mcp-config", str(mcp_config)])
                 logger.info("Reviewer using MCP config: %s", mcp_config)
 
+            # Security hardening: --allowedTools whitelist, scrubbed env.
+            from src.security import get_safe_subprocess_env, harden_claude_cli_args
+            cmd = harden_claude_cli_args(cmd, approval_mode="plan-review", config=self.config)
+
             result = subprocess.run(
                 cmd,
                 input=prompt,
+                env=get_safe_subprocess_env(),
                 capture_output=True,
                 text=True,
                 timeout=120,

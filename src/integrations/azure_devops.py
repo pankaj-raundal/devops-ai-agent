@@ -254,9 +254,6 @@ class AzureDevOpsClient:
 
         relations = data.get("relations", []) or []
         attachments: list[dict[str, str]] = []
-        text_exts = {".txt", ".md", ".html", ".htm", ".json", ".xml", ".xliff",
-                     ".xlf", ".csv", ".log", ".yaml", ".yml", ".php", ".js",
-                     ".ts", ".css", ".sql"}
         max_bytes = self.max_attachment_size_kb * 1024
 
         # Build auth header. Prefer PAT, fall back to `az account get-access-token`.
@@ -302,12 +299,23 @@ class AzureDevOpsClient:
                 "content": "",
             }
 
+            # Security: route through allowlist. Dangerous extensions (.sh, .exe,
+            # .ps1, etc.) are rejected outright.
+            from src.security import (
+                DANGEROUS_EXTENSIONS,
+                is_attachment_safe_to_inline,
+            )
             ext = os.path.splitext(name)[1].lower()
-            is_text = ext in text_exts
+            if ext in DANGEROUS_EXTENSIONS:
+                entry["content"] = f"(SECURITY: extension '{ext}' rejected — not downloaded)"
+                logger.warning("Rejected dangerous attachment '%s' on #%s", name, work_item_id)
+                attachments.append(entry)
+                attachment_count += 1
+                continue
 
-            # Skip download for binary files or oversize files.
-            if not is_text:
-                entry["content"] = f"(binary file, {size} bytes — not inlined)"
+            safe, reason = is_attachment_safe_to_inline(name)
+            if not safe:
+                entry["content"] = f"({reason})"
                 attachments.append(entry)
                 attachment_count += 1
                 continue

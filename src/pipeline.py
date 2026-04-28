@@ -109,6 +109,11 @@ class Pipeline:
             event_bus.clear_history()
         zendesk_ticket_id = None  # Populated if story originated from Zendesk.
 
+        # Pipeline start time — used for the post-flight write-boundary check
+        # (any file modified after this time outside module_path is a violation).
+        import time as _time
+        pipeline_start_time = _time.time()
+
         # --- Stage 1: Fetch story ---
         event_bus.emit(PipelineEvent("fetch_story", "running", "Fetching story from Azure DevOps..."))
         logger.info("=== Stage 1: Fetch Story ===")
@@ -458,6 +463,36 @@ class Pipeline:
         tlog.section("Implementation Result")
         tlog.kv("Method", impl_result.get("method", ""))
         tlog.kv("Success", str(impl_result.get("success", False)))
+
+        # --- Post-flight: detect writes outside the module sandbox ---
+        # Any file modified during this run that is NOT under module_path is a
+        # potential sandbox violation (Claude wrote where it shouldn't have).
+        try:
+            from src.security import detect_writes_outside_sandbox
+            module_abs = (self.workspace / self.implementer.module_path).resolve() if self.implementer.module_path else self.workspace.resolve()
+            violations = detect_writes_outside_sandbox(
+                workspace=self.workspace,
+                module_path=module_abs,
+                since_mtime=pipeline_start_time,
+            )
+            if violations:
+                logger.error("SECURITY: %d file(s) modified outside module sandbox!", len(violations))
+                tlog.section("⚠ SECURITY: Sandbox Violation")
+                for v in violations[:20]:
+                    tlog.write(f"  - {v}")
+                event_bus.emit(PipelineEvent("security", "fail",
+                    f"Writes outside sandbox: {len(violations)} file(s)",
+                    {"violations": [str(v) for v in violations[:20]]}))
+                self._emit_alert("error", f"Sandbox violation on #{work_item.id}: {len(violations)} file(s) outside module_path")
+                # Fail the pipeline — refuse to commit suspicious changes.
+                self._transition_state(work_item.id, self.state_on_failure)
+                results.append(PipelineResult(
+                    Stage.IMPLEMENT, False,
+                    error=f"Sandbox violation: {len(violations)} file(s) modified outside module_path",
+                ))
+                return results
+        except Exception as e:
+            logger.warning("Post-flight sandbox check failed (non-fatal): %s", e)
         tlog.write(impl_result.get("output", "")[:5000])
 
         # Commit changes (skipped if --skip-git-add).

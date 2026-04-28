@@ -467,8 +467,12 @@ class ImplementationAgent:
             mcp_config = get_mcp_config_path()
             if mcp_config:
                 cmd.extend(["--mcp-config", str(mcp_config)])
+            # Apply security hardening: --allowedTools whitelist (no Bash/WebFetch).
+            from src.security import get_safe_subprocess_env, harden_claude_cli_args
+            cmd = harden_claude_cli_args(cmd, approval_mode="plan-review", config=self.config)
             result = subprocess.run(
                 cmd, input=prompt, cwd=self.workspace_dir,
+                env=get_safe_subprocess_env(),
                 capture_output=True, text=True, timeout=600,
             )
             if result.returncode == 0 and result.stdout.strip():
@@ -1430,9 +1434,6 @@ class ImplementationAgent:
         # through to the API path which will also hit the same rate limit.
         # In cli_only mode, retry more patiently with exponential backoff.
         cmd = ["claude", "-p"]
-        if self.approval_mode == "auto":
-            cmd.append("--dangerously-skip-permissions")
-            logger.warning("Using --dangerously-skip-permissions (auto mode).")
 
         # Attach MCP config if available — gives Claude tool access to filesystem,
         # Azure DevOps, and git via MCP servers instead of blind text pipe.
@@ -1441,6 +1442,13 @@ class ImplementationAgent:
         if mcp_config:
             cmd.extend(["--mcp-config", str(mcp_config)])
             logger.info("Claude CLI using MCP config: %s", mcp_config)
+
+        # Security hardening: --allowedTools whitelist replaces
+        # --dangerously-skip-permissions. Claude can only call whitelisted tools
+        # (no Bash, no WebFetch). Subprocess env is scrubbed of cloud creds.
+        from src.security import get_safe_subprocess_env, harden_claude_cli_args
+        cmd = harden_claude_cli_args(cmd, approval_mode=self.approval_mode, config=self.config)
+        safe_env = get_safe_subprocess_env()
 
         max_retries = self.max_cli_retries if self.cli_only else 3
         base_wait = self.cli_retry_base_wait
@@ -1451,6 +1459,7 @@ class ImplementationAgent:
                     cmd,
                     input=prompt,
                     cwd=self.workspace_dir,
+                    env=safe_env,
                     capture_output=True,
                     text=True,
                     timeout=600,
@@ -1729,6 +1738,7 @@ class ImplementationAgent:
     def _load_system_prompt(self) -> str:
         """Load the system prompt template, substituting framework-specific values."""
         from src.profiles import get_profile
+        from src.security import SECURITY_PROMPT_BLOCK
 
         profile = get_profile(self.config)
 
@@ -1744,10 +1754,13 @@ class ImplementationAgent:
                     f"- Use dependency injection where possible\n"
                     f"- Add documentation comments for new public methods"
                 )
-                return template.replace("{coding_standards}", coding_standards)
+                rendered = template.replace("{coding_standards}", coding_standards)
+                # Prepend SECURITY block so it has highest priority in the prompt.
+                return f"{SECURITY_PROMPT_BLOCK}\n\n{rendered}"
 
         # Fallback: use profile-driven system prompt.
         return (
+            f"{SECURITY_PROMPT_BLOCK}\n\n"
             f"{profile['system_prompt_prefix']} "
             f"When making changes, be precise and surgical — only change what's needed."
         )
